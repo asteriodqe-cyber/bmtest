@@ -1,0 +1,93 @@
+{
+  "benchmark_id": "b2",
+  "name": "条件场景适配",
+  "description": "验证 Skill 能否根据产品类型引导 Agent 调整 PRD 风格和侧重点",
+  "scenarios": {
+    "b2b": {
+      "scenario_id": "b2b",
+      "label": "B2B 企业级产品",
+      "assertions": [
+        {
+          "id": "b2b_01",
+          "type": "content_presence",
+          "method": "rule",
+          "check": "输出包含以下任意关键词：权限管理、角色隔离、审批流程、多租户、SLA、数据安全",
+          "points": 2
+        },
+        {
+          "id": "b2b_02",
+          "type": "content_absence",
+          "method": "rule",
+          "check": "输出不以病毒式传播、增长黑客、DAU、裂变作为核心指标",
+          "points": 1
+        },
+        {
+          "id": "b2b_03",
+          "type": "depth",
+          "method": "llm",
+          "check": "PRD 包含详细的权限或安全相关章节，而非一笔带过",
+          "points": 2
+        }
+      ],
+      "total_points": 5
+    },
+    "consumer": {
+      "scenario_id": "consumer",
+      "label": "C端消费级产品",
+      "assertions": [
+        {
+          "id": "c_01",
+          "type": "content_presence",
+          "method": "rule",
+          "check": "输出包含以下任意关键词：用户体验、留存率、增长策略、用户旅程、转化率",
+          "points": 2
+        },
+        {
+          "id": "c_02",
+          "type": "content_absence",
+          "method": "rule",
+          "check": "输出不以多级审批、企业合规、组织架构作为核心设计约束",
+          "points": 1
+        },
+        {
+          "id": "c_03",
+          "type": "depth",
+          "method": "llm",
+          "check": "PRD 侧重用户体验和增长逻辑，而非系统权限和流程管控",
+          "points": 2
+        }
+      ],
+      "total_points": 5
+    },
+    "internal": {
+      "scenario_id": "internal",
+      "label": "内部工具",
+      "assertions": [
+        {
+          "id": "int_01",
+          "type": "content_presence",
+          "method": "rule",
+          "check": "输出包含以下任意关键词：效率提升、内部用户、低维护、快速搭建、运营团队",
+          "points": 2
+        },
+        {
+          "id": "int_02",
+          "type": "content_absence",
+          "method": "rule",
+          "check": "输出不包含大篇幅的市场分析或竞品分析章节",
+          "points": 1
+        },
+        {
+          "id": "int_03",
+          "type": "depth",
+          "method": "llm",
+          "check": "PRD 结构精简，聚焦功能描述和使用场景，而非市场策略",
+          "points": 2
+        }
+      ],
+      "total_points": 5
+    }
+  },
+  "passing_score_per_scenario": 3,
+  "note": "三个场景均需通过，overall_pass = all(scenario_score >= passing_score_per_scenario)"
+}
