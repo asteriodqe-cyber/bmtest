@@ -1,0 +1,65 @@
+{
+  "benchmark_id": "b1",
+  "name": "基础结构合规性",
+  "description": "验证 Skill 能否引导 Agent 产出结构完整的 PRD",
+  "assertions": [
+    {
+      "id": "b1_01",
+      "type": "structural",
+      "method": "rule",
+      "check": "输出包含'背景'或'Background'章节",
+      "points": 1
+    },
+    {
+      "id": "b1_02",
+      "type": "structural",
+      "method": "rule",
+      "check": "输出包含'用户故事'或'User Stories'或'As a'格式内容",
+      "points": 1
+    },
+    {
+      "id": "b1_03",
+      "type": "structural",
+      "method": "rule",
+      "check": "输出包含'验收标准'或'Acceptance Criteria'章节",
+      "points": 1
+    },
+    {
+      "id": "b1_04",
+      "type": "structural",
+      "method": "rule",
+      "check": "输出包含'非目标'或'Out of Scope'章节",
+      "points": 1
+    },
+    {
+      "id": "b1_05",
+      "type": "ordering",
+      "method": "rule",
+      "check": "'背景'章节出现在'用户故事'章节之前",
+      "points": 1
+    },
+    {
+      "id": "b1_06",
+      "type": "ordering",
+      "method": "rule",
+      "check": "'用户故事'章节出现在'验收标准'章节之前",
+      "points": 1
+    },
+    {
+      "id": "b1_07",
+      "type": "completeness",
+      "method": "llm",
+      "check": "每个用户故事都有对应的验收标准，不存在孤立的用户故事",
+      "points": 2
+    },
+    {
+      "id": "b1_08",
+      "type": "completeness",
+      "method": "llm",
+      "check": "背景章节包含问题描述和目标用户，而非仅有标题",
+      "points": 2
+    }
+  ],
+  "total_points": 10,
+  "passing_score": 7
+}
