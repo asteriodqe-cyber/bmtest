@@ -5,37 +5,67 @@
       "scenario": "b2b",
       "id": "b2_tc_b2b_01",
       "label": "企业级 CRM",
+      "type": "standard",
       "prompt": "[场景：B2B企业级产品] 请为一个面向销售团队的企业级 CRM 系统撰写产品需求文档"
     },
     {
       "scenario": "b2b",
       "id": "b2_tc_b2b_02",
       "label": "企业审批流",
+      "type": "standard",
       "prompt": "[场景：B2B企业级产品] 请为一个企业内部的多级审批流程系统撰写产品需求文档"
     },
     {
       "scenario": "consumer",
       "id": "b2_tc_c_01",
       "label": "短视频 APP",
+      "type": "standard",
       "prompt": "[场景：C端消费级产品] 请为一个短视频社交 APP 的推荐feed流功能撰写产品需求文档"
     },
     {
       "scenario": "consumer",
       "id": "b2_tc_c_02",
       "label": "在线健身",
+      "type": "standard",
       "prompt": "[场景：C端消费级产品] 请为一个面向个人用户的在线健身课程平台撰写产品需求文档"
     },
     {
       "scenario": "internal",
       "id": "b2_tc_int_01",
       "label": "运营数据看板",
+      "type": "standard",
       "prompt": "[场景：内部工具] 请为公司运营团队设计一个数据监控看板，撰写产品需求文档"
     },
     {
       "scenario": "internal",
       "id": "b2_tc_int_02",
       "label": "内容审核工具",
+      "type": "standard",
       "prompt": "[场景：内部工具] 请为内容审核团队设计一个提升审核效率的内部工具，撰写产品需求文档"
+    },
+    {
+      "scenario": "b2b",
+      "id": "b2_tc_b2b_edge_01",
+      "label": "B2B 边界：仅提产品名",
+      "type": "edge",
+      "note": "测试 Skill 在 B2B 场景下，输入极简时能否仍触发企业级特征（权限、安全等）",
+      "prompt": "[场景：B2B企业级产品] 做一个项目管理工具的PRD"
+    },
+    {
+      "scenario": "consumer",
+      "id": "b2_tc_c_edge_01",
+      "label": "C端边界：B2C 混合场景",
+      "type": "edge",
+      "note": "测试 Skill 面对 B2C 混合产品时能否正确判断侧重点，而非混用两种模板",
+      "prompt": "[场景：C端消费级产品] 请为一个面向个人用户的企业发票管理 APP 撰写产品需求文档"
+    },
+    {
+      "scenario": "internal",
+      "id": "b2_tc_int_edge_01",
+      "label": "内部工具边界：高频复杂操作",
+      "type": "edge",
+      "note": "测试 Skill 面对功能复杂的内部工具时能否保持精简风格，而非膨胀为完整产品 PRD",
+      "prompt": "[场景：内部工具] 请为客服团队设计一个集成了工单系统、知识库和用户画像查询的多功能操作台，撰写产品需求文档"
     }
   ]
 }
