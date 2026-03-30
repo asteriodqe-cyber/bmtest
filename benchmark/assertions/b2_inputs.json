@@ -1,0 +1,41 @@
+{
+  "benchmark_id": "b2",
+  "test_cases": [
+    {
+      "scenario": "b2b",
+      "id": "b2_tc_b2b_01",
+      "label": "企业级 CRM",
+      "prompt": "[场景：B2B企业级产品] 请为一个面向销售团队的企业级 CRM 系统撰写产品需求文档"
+    },
+    {
+      "scenario": "b2b",
+      "id": "b2_tc_b2b_02",
+      "label": "企业审批流",
+      "prompt": "[场景：B2B企业级产品] 请为一个企业内部的多级审批流程系统撰写产品需求文档"
+    },
+    {
+      "scenario": "consumer",
+      "id": "b2_tc_c_01",
+      "label": "短视频 APP",
+      "prompt": "[场景：C端消费级产品] 请为一个短视频社交 APP 的推荐feed流功能撰写产品需求文档"
+    },
+    {
+      "scenario": "consumer",
+      "id": "b2_tc_c_02",
+      "label": "在线健身",
+      "prompt": "[场景：C端消费级产品] 请为一个面向个人用户的在线健身课程平台撰写产品需求文档"
+    },
+    {
+      "scenario": "internal",
+      "id": "b2_tc_int_01",
+      "label": "运营数据看板",
+      "prompt": "[场景：内部工具] 请为公司运营团队设计一个数据监控看板，撰写产品需求文档"
+    },
+    {
+      "scenario": "internal",
+      "id": "b2_tc_int_02",
+      "label": "内容审核工具",
+      "prompt": "[场景：内部工具] 请为内容审核团队设计一个提升审核效率的内部工具，撰写产品需求文档"
+    }
+  ]
+}
