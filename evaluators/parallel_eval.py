@@ -114,7 +114,7 @@ def run_benchmark(
     benchmark_id: str,
     provider: str = "moonshot",
     model: str = "kimi-k2.5",
-    temperature: float = 0.1,
+    temperature: float = 0.6,
     n_runs: int = 5,
     scenario: str | None = None
 ) -> dict:
@@ -284,7 +284,7 @@ def main():
     parser.add_argument("--benchmark", required=True, choices=["b1", "b2", "b3"])
     parser.add_argument("--provider", default="moonshot", choices=["moonshot", "anthropic"])
     parser.add_argument("--model", default="kimi-k2.5")
-    parser.add_argument("--temperature", type=float, default=0.1)
+    parser.add_argument("--temperature", type=float, default=0.6)
     parser.add_argument("--n-runs", type=int, default=5)
     parser.add_argument("--scenario", default=None,
                         help="B2 only: b2b / consumer / internal")
