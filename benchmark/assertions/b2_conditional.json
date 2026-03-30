@@ -1,7 +1,7 @@
 {
   "benchmark_id": "b2",
   "name": "条件场景适配",
-  "description": "验证 Skill 能否根据产品类型引导 Agent 调整 PRD 风格和侧重点",
+  "description": "验证 Skill 能否根据产品类型引导 Agent 调整 PRD 的用户画像、功能侧重和设计约束",
   "scenarios": {
     "b2b": {
       "scenario_id": "b2b",
@@ -9,27 +9,46 @@
       "assertions": [
         {
           "id": "b2b_01",
-          "type": "content_presence",
-          "method": "rule",
-          "check": "输出包含以下任意关键词：权限管理、角色隔离、审批流程、多租户、SLA、数据安全",
+          "type": "persona_fit",
+          "method": "llm",
+          "chapter": "目标用户与用户画像",
+          "check": "用户画像描述的是企业内部角色（如销售经理、IT管理员、审批人），而非个人消费者",
           "points": 2
         },
         {
           "id": "b2b_02",
-          "type": "content_absence",
+          "type": "content_presence",
           "method": "rule",
-          "check": "输出不以病毒式传播、增长黑客、DAU、裂变作为核心指标",
-          "points": 1
+          "chapter": "功能需求",
+          "check": "功能需求包含以下任意关键词：权限管理、角色隔离、审批流程、多租户、数据安全、组织架构",
+          "points": 2
         },
         {
           "id": "b2b_03",
+          "type": "content_absence",
+          "method": "rule",
+          "chapter": "功能需求",
+          "check": "功能需求不以病毒式传播、裂变、DAU增长作为核心功能目标",
+          "points": 1
+        },
+        {
+          "id": "b2b_04",
+          "type": "metrics_fit",
+          "method": "llm",
+          "chapter": "度量指标与成功标准",
+          "check": "成功指标侧重企业效率或合规性（如审批时长、系统稳定性、数据安全事件数），而非用户增长指标",
+          "points": 2
+        },
+        {
+          "id": "b2b_05",
           "type": "depth",
           "method": "llm",
-          "check": "PRD 包含详细的权限或安全相关章节，而非一笔带过",
+          "chapter": "非功能需求",
+          "check": "非功能需求包含安全性或可扩展性的详细要求，而非一笔带过",
           "points": 2
         }
       ],
-      "total_points": 5
+      "total_points": 9
     },
     "consumer": {
       "scenario_id": "consumer",
@@ -37,27 +56,46 @@
       "assertions": [
         {
           "id": "c_01",
-          "type": "content_presence",
-          "method": "rule",
-          "check": "输出包含以下任意关键词：用户体验、留存率、增长策略、用户旅程、转化率",
+          "type": "persona_fit",
+          "method": "llm",
+          "chapter": "目标用户与用户画像",
+          "check": "用户画像描述的是个人消费者特征（如年龄、使用习惯、消费动机），而非企业角色",
           "points": 2
         },
         {
           "id": "c_02",
-          "type": "content_absence",
+          "type": "content_presence",
           "method": "rule",
-          "check": "输出不以多级审批、企业合规、组织架构作为核心设计约束",
-          "points": 1
+          "chapter": "用户场景与用例",
+          "check": "用户场景包含以下任意关键词：用户旅程、使用习惯、个性化、推荐、社交",
+          "points": 2
         },
         {
           "id": "c_03",
+          "type": "content_absence",
+          "method": "rule",
+          "chapter": "功能需求",
+          "check": "功能需求不以多级审批、企业合规、组织架构作为核心设计约束",
+          "points": 1
+        },
+        {
+          "id": "c_04",
+          "type": "metrics_fit",
+          "method": "llm",
+          "chapter": "度量指标与成功标准",
+          "check": "成功指标侧重用户体验或增长（如留存率、DAU、NPS、转化率），而非企业效率指标",
+          "points": 2
+        },
+        {
+          "id": "c_05",
           "type": "depth",
           "method": "llm",
-          "check": "PRD 侧重用户体验和增长逻辑，而非系统权限和流程管控",
+          "chapter": "用户体验与设计说明",
+          "check": "用户体验章节有具体的交互描述或用户旅程说明，而非仅列标题",
           "points": 2
         }
       ],
-      "total_points": 5
+      "total_points": 9
     },
     "internal": {
       "scenario_id": "internal",
@@ -65,29 +103,50 @@
       "assertions": [
         {
           "id": "int_01",
-          "type": "content_presence",
-          "method": "rule",
-          "check": "输出包含以下任意关键词：效率提升、内部用户、低维护、快速搭建、运营团队",
+          "type": "persona_fit",
+          "method": "llm",
+          "chapter": "目标用户与用户画像",
+          "check": "用户画像描述的是公司内部特定团队成员（如运营、客服、审核人员），并说明其工作场景",
           "points": 2
         },
         {
           "id": "int_02",
-          "type": "content_absence",
+          "type": "content_presence",
           "method": "rule",
-          "check": "输出不包含大篇幅的市场分析或竞品分析章节",
-          "points": 1
+          "chapter": "目标",
+          "check": "目标章节包含以下任意关键词：效率提升、降低人工、减少错误、节省时间",
+          "points": 2
         },
         {
           "id": "int_03",
+          "type": "content_absence",
+          "method": "rule",
+          "chapter": "功能需求",
+          "check": "PRD 不包含大篇幅的市场分析、竞品分析或用户增长策略",
+          "points": 1
+        },
+        {
+          "id": "int_04",
+          "type": "metrics_fit",
+          "method": "llm",
+          "chapter": "度量指标与成功标准",
+          "check": "成功指标侧重内部效率（如处理时长、错误率、人工介入次数），而非外部用户增长",
+          "points": 2
+        },
+        {
+          "id": "int_05",
           "type": "depth",
           "method": "llm",
-          "check": "PRD 结构精简，聚焦功能描述和使用场景，而非市场策略",
+          "chapter": "假设与约束",
+          "check": "假设与约束章节提到内部资源限制或与现有系统的兼容性要求",
           "points": 2
         }
       ],
-      "total_points": 5
+      "total_points": 9
     }
   },
-  "passing_score_per_scenario": 3,
-  "note": "三个场景均需通过，overall_pass = all(scenario_score >= passing_score_per_scenario)"
+  "passing_score_per_scenario": 6,
+  "overall_pass_rule": "三个场景得分均 >= passing_score_per_scenario 视为整体通过",
+  "scoring_note": "rule类断言各1-2分，llm类断言各2分。每场景满分9分，6分及以上通过（约67%）",
+  "key_change_note": "修正：原版用留存率、转化率作为C端内容检查关键词，实为度量指标而非PRD内容侧重。修正后改为检查用户画像、场景描述和度量指标章节是否与场景匹配，三个层面共同验证场景适配能力"
 }
