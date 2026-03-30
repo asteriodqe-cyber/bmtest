@@ -1,0 +1,51 @@
+{
+  "benchmark_id": "b3",
+  "name": "流程编排完整性",
+  "description": "验证 Skill 能否引导 Agent 完成 PRD → 任务拆解的多步骤流程，且任务与 PRD 存在语义关联",
+  "assertions": [
+    {
+      "id": "b3_01",
+      "type": "step_existence",
+      "method": "rule",
+      "check": "输出包含明确的 PRD 部分（含背景、用户故事等章节）",
+      "points": 1
+    },
+    {
+      "id": "b3_02",
+      "type": "step_existence",
+      "method": "rule",
+      "check": "输出包含明确的任务列表部分（含编号任务或开发清单）",
+      "points": 1
+    },
+    {
+      "id": "b3_03",
+      "type": "ordering",
+      "method": "llm",
+      "check": "PRD 部分整体出现在任务列表部分之前",
+      "points": 2
+    },
+    {
+      "id": "b3_04",
+      "type": "semantic_dependency",
+      "method": "llm",
+      "check": "任务列表中的每个任务都能在 PRD 的用户故事或功能描述中找到对应来源",
+      "points": 3
+    },
+    {
+      "id": "b3_05",
+      "type": "semantic_dependency",
+      "method": "llm",
+      "check": "不存在无法追溯到 PRD 任何功能点的孤立任务",
+      "points": 2
+    },
+    {
+      "id": "b3_06",
+      "type": "consistency",
+      "method": "llm",
+      "check": "任务的优先级或分组与 PRD 中功能的重要程度保持一致",
+      "points": 1
+    }
+  ],
+  "total_points": 10,
+  "passing_score": 7
+}
