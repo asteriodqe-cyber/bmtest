@@ -1,65 +1,186 @@
 {
   "benchmark_id": "b1",
   "name": "基础结构合规性",
-  "description": "验证 Skill 能否引导 Agent 产出结构完整的 PRD",
+  "description": "验证 Skill 能否引导 Agent 产出结构完整的 PRD，覆盖所有必要章节",
   "assertions": [
     {
       "id": "b1_01",
       "type": "structural",
       "method": "rule",
-      "check": "输出包含'背景'或'Background'章节",
+      "chapter": "背景与现状",
+      "check": "输出包含'背景'或'Background'或'现状'章节",
       "points": 1
     },
     {
       "id": "b1_02",
       "type": "structural",
       "method": "rule",
-      "check": "输出包含'用户故事'或'User Stories'或'As a'格式内容",
+      "chapter": "目标",
+      "check": "输出包含'目标'或'Objectives'或'Goals'章节",
       "points": 1
     },
     {
       "id": "b1_03",
       "type": "structural",
       "method": "rule",
-      "check": "输出包含'验收标准'或'Acceptance Criteria'章节",
+      "chapter": "目标用户与用户画像",
+      "check": "输出包含'目标用户'或'用户画像'或'Persona'或'User Segment'章节",
       "points": 1
     },
     {
       "id": "b1_04",
       "type": "structural",
       "method": "rule",
-      "check": "输出包含'非目标'或'Out of Scope'章节",
+      "chapter": "用户场景与用例",
+      "check": "输出包含'用户场景'或'用例'或'User Stories'或'Use Cases'章节",
       "points": 1
     },
     {
       "id": "b1_05",
-      "type": "ordering",
+      "type": "structural",
       "method": "rule",
-      "check": "'背景'章节出现在'用户故事'章节之前",
+      "chapter": "功能需求",
+      "check": "输出包含'功能需求'或'Functional Requirements'章节",
       "points": 1
     },
     {
       "id": "b1_06",
-      "type": "ordering",
+      "type": "structural",
       "method": "rule",
-      "check": "'用户故事'章节出现在'验收标准'章节之前",
+      "chapter": "非功能需求",
+      "check": "输出包含'非功能需求'或'Non-Functional Requirements'章节",
       "points": 1
     },
     {
       "id": "b1_07",
-      "type": "completeness",
-      "method": "llm",
-      "check": "每个用户故事都有对应的验收标准，不存在孤立的用户故事",
-      "points": 2
+      "type": "structural",
+      "method": "rule",
+      "chapter": "用户体验与设计说明",
+      "check": "输出包含'用户体验'或'设计说明'或'UX'或'User Experience'章节",
+      "points": 1
     },
     {
       "id": "b1_08",
+      "type": "structural",
+      "method": "rule",
+      "chapter": "假设与约束",
+      "check": "输出包含'假设'或'约束'或'Assumptions'或'Constraints'章节",
+      "points": 1
+    },
+    {
+      "id": "b1_09",
+      "type": "structural",
+      "method": "rule",
+      "chapter": "依赖关系",
+      "check": "输出包含'依赖'或'Dependencies'章节",
+      "points": 1
+    },
+    {
+      "id": "b1_10",
+      "type": "structural",
+      "method": "rule",
+      "chapter": "验收标准",
+      "check": "输出包含'验收标准'或'Acceptance Criteria'章节",
+      "points": 1
+    },
+    {
+      "id": "b1_11",
+      "type": "structural",
+      "method": "rule",
+      "chapter": "度量指标与成功标准",
+      "check": "输出包含'度量指标'或'成功标准'或'Metrics'或'Success Criteria'章节",
+      "points": 1
+    },
+    {
+      "id": "b1_12",
+      "type": "structural",
+      "method": "rule",
+      "chapter": "发布计划与时间线",
+      "check": "输出包含'发布计划'或'时间线'或'Timeline'或'Release Plan'章节",
+      "points": 1
+    },
+    {
+      "id": "b1_13",
+      "type": "structural",
+      "method": "rule",
+      "chapter": "非目标",
+      "check": "输出包含'非目标'或'Out of Scope'或'不包含'章节",
+      "points": 1
+    },
+    {
+      "id": "b1_14",
+      "type": "structural",
+      "method": "rule",
+      "chapter": "开放问题",
+      "check": "输出包含'开放问题'或'待确认'或'Open Questions'章节",
+      "points": 1
+    },
+    {
+      "id": "b1_15",
+      "type": "ordering",
+      "method": "rule",
+      "chapter": "章节顺序前段",
+      "check": "'背景'章节出现在'目标'章节之前",
+      "points": 1
+    },
+    {
+      "id": "b1_16",
+      "type": "ordering",
+      "method": "rule",
+      "chapter": "章节顺序中段",
+      "check": "'目标用户'章节出现在'功能需求'章节之前",
+      "points": 1
+    },
+    {
+      "id": "b1_17",
+      "type": "ordering",
+      "method": "rule",
+      "chapter": "章节顺序后段",
+      "check": "'功能需求'章节出现在'验收标准'章节之前",
+      "points": 1
+    },
+    {
+      "id": "b1_18",
       "type": "completeness",
       "method": "llm",
-      "check": "背景章节包含问题描述和目标用户，而非仅有标题",
+      "chapter": "背景质量",
+      "check": "'背景'章节包含问题描述和业务动机，而非仅有标题或一句话",
+      "points": 2
+    },
+    {
+      "id": "b1_19",
+      "type": "completeness",
+      "method": "llm",
+      "chapter": "用户故事质量",
+      "check": "用户场景章节使用'作为[用户]，我希望[功能]，以便[价值]'格式，且每个故事完整",
+      "points": 2
+    },
+    {
+      "id": "b1_20",
+      "type": "completeness",
+      "method": "llm",
+      "chapter": "功能需求质量",
+      "check": "功能需求章节包含具体功能描述和边界情况，而非仅列举功能名称",
+      "points": 2
+    },
+    {
+      "id": "b1_21",
+      "type": "completeness",
+      "method": "llm",
+      "chapter": "验收标准质量",
+      "check": "每个主要功能点都有对应的验收标准，不存在孤立的功能描述",
+      "points": 2
+    },
+    {
+      "id": "b1_22",
+      "type": "completeness",
+      "method": "llm",
+      "chapter": "度量指标质量",
+      "check": "度量指标章节包含具体可量化的成功指标，而非模糊表述",
       "points": 2
     }
   ],
-  "total_points": 10,
-  "passing_score": 7
+  "total_points": 25,
+  "passing_score": 18,
+  "scoring_note": "rule类断言各1分，llm类断言各2分，共25分。18分及以上视为通过（约72%）"
 }
