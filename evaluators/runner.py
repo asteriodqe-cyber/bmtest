@@ -7,7 +7,12 @@ from dataclasses import dataclass, field
 from typing import Any
 from pathlib import Path
 
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_not_exception_type
+)
 
 
 @dataclass
@@ -53,7 +58,11 @@ def build_metadata(
     }
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    retry=retry_if_not_exception_type((ValueError, EnvironmentError))
+)
 def _call_moonshot(
     system_prompt: str,
     user_prompt: str,
@@ -63,8 +72,8 @@ def _call_moonshot(
     """
     调用 Kimi API（中国平台）
 
-    注意：kimi-k2.5 instant mode 强制要求 temperature=0.6，
-    忽略外部传入的 temperature 参数。
+    kimi-k2.5 instant mode 强制要求 temperature=0.6
+    retry 不重试 ValueError 和 EnvironmentError（配置错误，重试无意义）
     """
     from openai import OpenAI
 
@@ -86,7 +95,7 @@ def _call_moonshot(
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ],
-        temperature=0.6,  # kimi-k2.5 instant mode 固定要求 0.6
+        temperature=0.6,
         max_tokens=4096,
         timeout=60,
         extra_body={"thinking": {"type": "disabled"}}
@@ -117,14 +126,22 @@ def _call_moonshot(
     )
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    retry=retry_if_not_exception_type((ValueError, EnvironmentError))
+)
 def _call_anthropic(
     system_prompt: str,
     user_prompt: str,
     model: str,
     temperature: float
 ) -> AgentExecutionResult:
-    """调用 Claude API"""
+    """
+    调用 Claude API
+
+    retry 不重试 ValueError 和 EnvironmentError（配置错误，重试无意义）
+    """
     import anthropic
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -164,7 +181,7 @@ def run_surrogate_agent(
     user_input: str,
     provider: str = "moonshot",
     model: str = "kimi-k2.5",
-    temperature: float = 0.1,
+    temperature: float = 0.6,
     use_skill: bool = True
 ) -> AgentExecutionResult:
     """
@@ -175,7 +192,7 @@ def run_surrogate_agent(
         user_input:  用户任务描述
         provider:    API 提供方，moonshot 或 anthropic
         model:       模型名称，默认 kimi-k2.5
-        temperature: 采样温度（moonshot 固定使用 0.6，此参数对 moonshot 无效）
+        temperature: 采样温度（moonshot 固定使用 0.6）
         use_skill:   True = with_skill 条件，False = baseline 条件
     """
     if use_skill:
@@ -183,7 +200,6 @@ def run_surrogate_agent(
     else:
         system_prompt = "你是一个产品经理助手，帮助用户撰写产品文档。"
 
-    # moonshot kimi-k2.5 强制要求 temperature=0.6
     if provider == "moonshot":
         temperature = 0.6
 
