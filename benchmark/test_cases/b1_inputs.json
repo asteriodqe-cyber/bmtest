@@ -4,27 +4,46 @@
     {
       "id": "b1_tc_01",
       "label": "电商购物车",
+      "type": "standard",
       "prompt": "请为一个电商平台的购物车功能撰写产品需求文档"
     },
     {
       "id": "b1_tc_02",
       "label": "社交点赞",
+      "type": "standard",
       "prompt": "请为一个社交 APP 的点赞与表情回应功能撰写产品需求文档"
     },
     {
       "id": "b1_tc_03",
       "label": "用户注册登录",
+      "type": "standard",
       "prompt": "请为一个移动端 APP 的用户注册与登录模块撰写产品需求文档"
     },
     {
       "id": "b1_tc_04",
       "label": "消息通知",
+      "type": "standard",
       "prompt": "请为一个应用内消息通知系统撰写产品需求文档，需涵盖推送、站内信和邮件三个渠道"
     },
     {
       "id": "b1_tc_05",
       "label": "搜索功能",
+      "type": "standard",
       "prompt": "请为一个内容平台的全文搜索功能撰写产品需求文档"
+    },
+    {
+      "id": "b1_tc_edge_01",
+      "label": "极简需求描述",
+      "type": "edge",
+      "note": "测试 Skill 在输入信息严重不足时能否仍引导 Agent 产出完整结构",
+      "prompt": "做一个用户登录功能的PRD"
+    },
+    {
+      "id": "b1_tc_edge_02",
+      "label": "跨平台复杂需求",
+      "type": "edge",
+      "note": "测试 Skill 在需求跨度较大时能否维持结构完整性而不遗漏章节",
+      "prompt": "为一个同时覆盖 iOS、Android、Web 三端的用户账号体系撰写 PRD，需要考虑数据同步和单点登录"
     }
   ]
 }
