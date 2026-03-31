@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
+import logging
 import os
 import time
+from datetime import datetime
 from pathlib import Path
 
+import aiohttp
+from dotenv import load_dotenv
 from tqdm import tqdm
 
-from evaluators.runner import run_surrogate_agent, build_metadata
+load_dotenv()
+
+from evaluators.runner import run_surrogate_agent, build_metadata, compute_sha256
 from evaluators.assertion_checker import run_rule_assertions_for_benchmark
 from evaluators.llm_judge import run_llm_assertions_for_benchmark
 from evaluators.gain_calculator import (
@@ -20,10 +27,68 @@ from evaluators.gain_calculator import (
     _get_absolute_tier
 )
 
-TASK_TIMEOUT = 120
+# ── 日志配置 ──────────────────────────────────────────────
+
+Path("logs").mkdir(exist_ok=True)
+LOG_FILE = f"logs/benchmark_{datetime.now():%m%d_%H%M%S}.log"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_FILE, encoding="utf-8"),
+    ]
+)
+logger = logging.getLogger(__name__)
+
+CHECKPOINT_FILE = "experiments/checkpoint.json"
+TASK_SEMAPHORE_SIZE = 3  # 最大并发数
 
 
-# ── 进度可视化工具 ────────────────────────────────────────
+# ── 断点续传 ──────────────────────────────────────────────
+
+def load_checkpoint() -> dict:
+    """加载断点记录"""
+    path = Path(CHECKPOINT_FILE)
+    if path.exists():
+        data = json.loads(path.read_text(encoding="utf-8"))
+        logger.info(f"Checkpoint loaded: {len(data.get('completed_runs', []))} runs completed")
+        return data
+    return {"completed_runs": [], "results": []}
+
+
+def save_checkpoint(checkpoint: dict) -> None:
+    """保存断点记录（精确到单次 run）"""
+    Path(CHECKPOINT_FILE).parent.mkdir(exist_ok=True)
+    Path(CHECKPOINT_FILE).write_text(
+        json.dumps(checkpoint, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+
+
+def clear_checkpoint() -> None:
+    """清除断点（实验完整完成后调用）"""
+    path = Path(CHECKPOINT_FILE)
+    if path.exists():
+        path.unlink()
+        logger.info("Checkpoint cleared — experiment completed successfully")
+
+
+def make_run_id(
+    skill_path: str,
+    benchmark_id: str,
+    scenario: str | None,
+    tc_id: str,
+    condition: str,
+    run_idx: int
+) -> str:
+    """生成唯一的 run ID，用于断点续传"""
+    skill_hash = compute_sha256(skill_path)[:8]
+    scenario_part = f"_{scenario}" if scenario else ""
+    return f"{skill_hash}_{benchmark_id}{scenario_part}_{tc_id}_{condition}_{run_idx}"
+
+
+# ── 可视化工具 ────────────────────────────────────────────
 
 def print_header(title: str) -> None:
     width = 60
@@ -33,7 +98,6 @@ def print_header(title: str) -> None:
 
 
 def print_tier_bar(score: float) -> str:
-    """可视化质量层级"""
     tier = _get_absolute_tier(score)
     bars = int(score * 20)
     bar = "█" * bars + "░" * (20 - bars)
@@ -51,7 +115,6 @@ def print_test_case_result(
     skill_kappa: float,
     baseline_kappa: float
 ) -> None:
-    """打印单个测试用例的详细结果"""
     print(f"\n  {'─'*55}")
     print(f"  with_skill")
     print(f"    pass_rate  : {print_tier_bar(skill_metrics['pass_rate'])}")
@@ -78,16 +141,13 @@ def print_overall_summary(
     total_cases: int,
     elapsed: float
 ) -> None:
-    """打印整体汇总结果"""
     print_header(f"OVERALL {benchmark_id.upper()} RESULT")
-
-    gain = overall_gain['gain']
-    efficacy = overall_gain['efficacy']
-    efficacy_icon = {"high": "🟢", "medium": "🟡", "low": "🔴"}.get(efficacy, "⚪")
-
     print(f"  {'Skill pass_rate :':<20} {print_tier_bar(overall_gain['skill_pass_rate'])}")
     print(f"  {'Base  pass_rate :':<20} {print_tier_bar(overall_gain['baseline_pass_rate'])}")
     print(f"  {'─'*55}")
+    gain = overall_gain['gain']
+    efficacy = overall_gain['efficacy']
+    efficacy_icon = {"high": "🟢", "medium": "🟡", "low": "🔴"}.get(efficacy, "⚪")
     print(f"  {'Skill Gain      :':<20} {gain:+.3f} {efficacy_icon} {efficacy.upper()}")
     print(f"  {'Absolute Tier   :':<20} {overall_gain['absolute_tier']}")
     print(f"  {'Meets Floor     :':<20} {'✅ YES' if overall_gain['meets_quality_floor'] else '❌ NO'}")
@@ -95,123 +155,92 @@ def print_overall_summary(
     print(f"  {'─'*55}")
     print(f"  {'Test cases      :':<20} {total_cases}")
     print(f"  {'Elapsed time    :':<20} {elapsed:.1f}s ({elapsed/60:.1f}min)")
+    print(f"  {'Log file        :':<20} {LOG_FILE}")
     print(f"{'='*60}\n")
 
 
-# ── 单次评估（主进程直接调用，无 pickle 问题）────────────
+# ── 单次评估 ──────────────────────────────────────────────
 
-def evaluate_single_run(args: tuple) -> dict:
+async def evaluate_single_run(
+    session: aiohttp.ClientSession,
+    semaphore: asyncio.Semaphore,
+    skill_path: str,
+    user_input: str,
+    use_skill: bool,
+    benchmark_id: str,
+    scenario: str | None,
+    run_id: str,
+    checkpoint: dict
+) -> dict:
     """
-    单次评估，在主进程中串行执行
+    单次评估（async）
 
-    改为串行的原因：
-    Windows spawn 模式下 ProcessPoolExecutor 子进程启动开销过大，
-    导致进程被强制终止。API 等待是主要瓶颈，串行执行总时间差异不大。
+    - 检查断点，已完成的直接返回缓存结果
+    - 用 semaphore 控制并发数
+    - 完成后立即写入断点
     """
-    (
-        skill_path, user_input, provider, model,
-        temperature, use_skill, benchmark_id, scenario,
-        api_keys
-    ) = args
+    # 断点检查：已完成的直接返回
+    if run_id in checkpoint["completed_runs"]:
+        cached = next(
+            (r for r in checkpoint["results"] if r.get("run_id") == run_id),
+            None
+        )
+        if cached:
+            logger.info(f"[SKIP] {run_id} — loaded from checkpoint")
+            return cached
 
-    if provider == "moonshot" and api_keys.get("moonshot"):
-        os.environ["MOONSHOT_API_KEY"] = api_keys["moonshot"]
-    elif provider == "anthropic" and api_keys.get("anthropic"):
-        os.environ["ANTHROPIC_API_KEY"] = api_keys["anthropic"]
+    async with semaphore:
+        logger.info(f"[START] {run_id}")
+        start = time.time()
 
-    result = run_surrogate_agent(
-        skill_path=skill_path,
-        user_input=user_input,
-        provider=provider,
-        model=model,
-        temperature=temperature,
-        use_skill=use_skill
-    )
+        result = await run_surrogate_agent(
+            session=session,
+            skill_path=skill_path,
+            user_input=user_input,
+            use_skill=use_skill
+        )
 
-    rule_results = run_rule_assertions_for_benchmark(
-        result.content, benchmark_id, scenario
-    )
-    llm_results = run_llm_assertions_for_benchmark(
-        result.content, benchmark_id, scenario, provider
-    )
+        rule_results = run_rule_assertions_for_benchmark(
+            result.content, benchmark_id, scenario
+        )
+        llm_results = await run_llm_assertions_for_benchmark(
+            result.content, benchmark_id, scenario
+        )
 
-    total_score = rule_results["rule_score"] + llm_results["llm_score"]
-    total_max = rule_results["rule_max_score"] + llm_results["llm_max_score"]
-    normalized = total_score / total_max if total_max > 0 else 0.0
+        total_score = rule_results["rule_score"] + llm_results["llm_score"]
+        total_max = rule_results["rule_max_score"] + llm_results["llm_max_score"]
+        normalized = total_score / total_max if total_max > 0 else 0.0
 
-    return {
-        "normalized_score": round(normalized, 4),
-        "rule_score": rule_results["rule_score"],
-        "llm_score": llm_results["llm_score"],
-        "total_score": round(total_score, 4),
-        "total_max": total_max
-    }
+        elapsed = time.time() - start
+        logger.info(f"[DONE] {run_id} | score={normalized:.3f} | {elapsed:.1f}s")
 
+        run_result = {
+            "run_id": run_id,
+            "normalized_score": round(normalized, 4),
+            "rule_score": rule_results["rule_score"],
+            "llm_score": llm_results["llm_score"],
+            "total_score": round(total_score, 4),
+            "total_max": total_max,
+            "elapsed": round(elapsed, 2)
+        }
 
-# ── 串行执行（替代原来的并行）────────────────────────────
+        # 立即写入断点（精确到单次 run）
+        checkpoint["completed_runs"].append(run_id)
+        checkpoint["results"].append(run_result)
+        save_checkpoint(checkpoint)
 
-def run_sequential(
-    args_list: list[tuple],
-    desc: str = "Evaluating"
-) -> list[float]:
-    """
-    串行执行评估任务，返回 normalized_score 列表
-
-    使用串行替代 ProcessPoolExecutor 的原因：
-    - Windows spawn 模式下多进程并发导致子进程被强制终止
-    - API 等待是主要瓶颈，串行执行总时间差异不大
-    - 串行执行完全避免 pickle 序列化问题
-    """
-    scores = []
-    success_count = 0
-    fail_count = 0
-
-    with tqdm(
-        total=len(args_list),
-        desc=f"    {desc}",
-        leave=False,
-        bar_format="{l_bar}{bar:25}{r_bar}"
-    ) as pbar:
-        for arg in args_list:
-            try:
-                result = evaluate_single_run(arg)
-                scores.append(result["normalized_score"])
-                success_count += 1
-                pbar.set_postfix({
-                    "ok": success_count,
-                    "fail": fail_count,
-                    "last": f"{result['normalized_score']:.2f}"
-                })
-            except Exception as e:
-                fail_count += 1
-                scores.append(0.0)
-                pbar.set_postfix({
-                    "ok": success_count,
-                    "fail": fail_count,
-                    "last": "ERROR"
-                })
-                tqdm.write(f"    [ERROR] {str(e)[:80]}")
-            finally:
-                pbar.update(1)
-
-    if fail_count > 0:
-        tqdm.write(f"    ⚠️  {fail_count} run(s) failed")
-
-    return scores
+        return run_result
 
 
 # ── 主评估流程 ────────────────────────────────────────────
 
-def run_benchmark(
+async def run_benchmark(
     skill_path: str,
     benchmark_id: str,
-    provider: str = "moonshot",
-    model: str = "kimi-k2.5",
-    temperature: float = 0.6,
-    n_runs: int = 5,
+    n_runs: int = 3,
     scenario: str | None = None
 ) -> dict:
-    """运行完整的 benchmark 评估（with_skill vs baseline 对比）"""
+    """运行完整的 benchmark 评估（async，支持断点续传）"""
     start_time = time.time()
 
     test_cases_path = Path(f"benchmark/test_cases/{benchmark_id}_inputs.json")
@@ -221,26 +250,23 @@ def run_benchmark(
     if benchmark_id == "b2" and scenario:
         test_cases = [tc for tc in test_cases if tc.get("scenario") == scenario]
 
+    provider = "moonshot"
+    model = "kimi-k2.5"
+    temperature = 0.6
+
     print_header(
         f"PRD Skill Benchmark — {benchmark_id.upper()}\n"
         f"  Provider : {provider} | Model: {model}\n"
         f"  Skill    : {skill_path}\n"
         f"  Cases    : {len(test_cases)} | Runs/case: {n_runs}\n"
-        f"  Mode     : Sequential (stable on Windows)"
+        f"  Concurrency: {TASK_SEMAPHORE_SIZE} | Judge: Claude Sonnet"
     )
 
-    if provider == "moonshot":
-        temperature = 0.6
-
-    api_keys = {
-        "moonshot": os.getenv("MOONSHOT_API_KEY", ""),
-        "anthropic": os.getenv("ANTHROPIC_API_KEY", "")
-    }
-
-    if provider == "moonshot" and not api_keys["moonshot"]:
-        raise EnvironmentError("MOONSHOT_API_KEY not set")
-    if provider == "anthropic" and not api_keys["anthropic"]:
-        raise EnvironmentError("ANTHROPIC_API_KEY not set")
+    # 加载断点
+    checkpoint = load_checkpoint()
+    resumed = len(checkpoint["completed_runs"])
+    if resumed > 0:
+        print(f"\n  ♻️  Resuming from checkpoint: {resumed} runs already completed")
 
     metadata = build_metadata(skill_path, provider, model, temperature, n_runs)
     skill_all_scores: list[float] = []
@@ -251,125 +277,163 @@ def run_benchmark(
     edge_count = sum(1 for tc in test_cases if tc.get("type") == "edge")
     print(f"\n  📊 Test breakdown: {standard_count} standard + {edge_count} edge cases")
 
-    try:
-        for i, tc in enumerate(test_cases, 1):
-            tc_type = tc.get("type", "standard")
-            tc_icon = "📌" if tc_type == "edge" else "📝"
-            print(f"\n  {tc_icon} Case {i}/{len(test_cases)}: [{tc['id']}] {tc['label']}")
+    semaphore = asyncio.Semaphore(TASK_SEMAPHORE_SIZE)
 
-            skill_args = [
-                (
-                    skill_path, tc["prompt"], provider, model,
-                    temperature, True, benchmark_id, scenario, api_keys
+    connector = aiohttp.TCPConnector(limit=TASK_SEMAPHORE_SIZE * 2)
+    async with aiohttp.ClientSession(connector=connector) as session:
+        try:
+            for i, tc in enumerate(test_cases, 1):
+                tc_type = tc.get("type", "standard")
+                tc_icon = "📌" if tc_type == "edge" else "📝"
+                print(f"\n  {tc_icon} Case {i}/{len(test_cases)}: [{tc['id']}] {tc['label']}")
+
+                # 构建所有 run 的参数
+                skill_run_ids = [
+                    make_run_id(skill_path, benchmark_id, scenario, tc["id"], "with_skill", j)
+                    for j in range(n_runs)
+                ]
+                baseline_run_ids = [
+                    make_run_id(skill_path, benchmark_id, scenario, tc["id"], "baseline", j)
+                    for j in range(n_runs)
+                ]
+
+                # 并发执行 with_skill
+                print(f"    with_skill ({n_runs} runs, max {TASK_SEMAPHORE_SIZE} concurrent)...")
+                skill_tasks = [
+                    evaluate_single_run(
+                        session, semaphore, skill_path, tc["prompt"],
+                        True, benchmark_id, scenario, run_id, checkpoint
+                    )
+                    for run_id in skill_run_ids
+                ]
+
+                skill_results = []
+                with tqdm(total=n_runs, desc="    with_skill", leave=False,
+                         bar_format="{l_bar}{bar:20}{r_bar}") as pbar:
+                    for coro in asyncio.as_completed(skill_tasks):
+                        result = await coro
+                        skill_results.append(result)
+                        pbar.set_postfix({"score": f"{result['normalized_score']:.2f}"})
+                        pbar.update(1)
+
+                # 并发执行 baseline
+                baseline_tasks = [
+                    evaluate_single_run(
+                        session, semaphore, skill_path, tc["prompt"],
+                        False, benchmark_id, scenario, run_id, checkpoint
+                    )
+                    for run_id in baseline_run_ids
+                ]
+
+                baseline_results = []
+                with tqdm(total=n_runs, desc="    baseline  ", leave=False,
+                         bar_format="{l_bar}{bar:20}{r_bar}") as pbar:
+                    for coro in asyncio.as_completed(baseline_tasks):
+                        result = await coro
+                        baseline_results.append(result)
+                        pbar.set_postfix({"score": f"{result['normalized_score']:.2f}"})
+                        pbar.update(1)
+
+                skill_scores = [r["normalized_score"] for r in skill_results]
+                baseline_scores = [r["normalized_score"] for r in baseline_results]
+
+                skill_metrics = calculate_metrics(skill_scores)
+                baseline_metrics = calculate_metrics(baseline_scores)
+                gain_result = calculate_skill_gain(skill_scores, baseline_scores, benchmark_id)
+                skill_kappa = calculate_cohens_kappa(skill_scores)
+                baseline_kappa = calculate_cohens_kappa(baseline_scores)
+
+                print_test_case_result(
+                    tc["id"], tc["label"], tc_type,
+                    skill_metrics, baseline_metrics,
+                    gain_result, skill_kappa, baseline_kappa
                 )
-                for _ in range(n_runs)
-            ]
-            baseline_args = [
-                (
-                    skill_path, tc["prompt"], provider, model,
-                    temperature, False, benchmark_id, scenario, api_keys
+
+                skill_all_scores.extend(skill_scores)
+                baseline_all_scores.extend(baseline_scores)
+
+                ts = time.strftime("%Y-%m-%d %H:%M:%S")
+
+                skill_row = {
+                    "timestamp": ts,
+                    "benchmark_id": benchmark_id,
+                    "scenario": scenario or "",
+                    "test_case": tc["id"],
+                    "skill_path": skill_path,
+                    "skill_hash": metadata["skill_hash"],
+                    "condition": "with_skill",
+                    "provider": provider,
+                    "model": model,
+                    "n_runs": n_runs,
+                    "pass_rate": skill_metrics["pass_rate"],
+                    "consistency": skill_metrics["consistency"],
+                    "final_score": skill_metrics["final_score"],
+                    "kappa": skill_kappa,
+                    "gain": gain_result["gain"],
+                    "efficacy": gain_result["efficacy"],
+                    "absolute_tier": gain_result["absolute_tier"],
+                    "meets_quality_floor": gain_result["meets_quality_floor"],
+                    "quality_floor": gain_result["quality_floor"],
+                    "diagnosis": gain_result["diagnosis"]
+                }
+
+                baseline_row = {
+                    "timestamp": ts,
+                    "benchmark_id": benchmark_id,
+                    "scenario": scenario or "",
+                    "test_case": tc["id"],
+                    "skill_path": skill_path,
+                    "skill_hash": metadata["skill_hash"],
+                    "condition": "baseline",
+                    "provider": provider,
+                    "model": model,
+                    "n_runs": n_runs,
+                    "pass_rate": baseline_metrics["pass_rate"],
+                    "consistency": baseline_metrics["consistency"],
+                    "final_score": baseline_metrics["final_score"],
+                    "kappa": baseline_kappa,
+                    "gain": 0.0,
+                    "efficacy": "N/A",
+                    "absolute_tier": _get_absolute_tier(baseline_metrics["pass_rate"]),
+                    "meets_quality_floor": "",
+                    "quality_floor": gain_result["quality_floor"],
+                    "diagnosis": "N/A"
+                }
+
+                assert set(skill_row.keys()) == set(CSV_FIELDNAMES), (
+                    f"skill_row keys mismatch\n"
+                    f"  extra  : {set(skill_row.keys()) - set(CSV_FIELDNAMES)}\n"
+                    f"  missing: {set(CSV_FIELDNAMES) - set(skill_row.keys())}"
                 )
-                for _ in range(n_runs)
-            ]
+                assert set(baseline_row.keys()) == set(CSV_FIELDNAMES), (
+                    f"baseline_row keys mismatch\n"
+                    f"  extra  : {set(baseline_row.keys()) - set(CSV_FIELDNAMES)}\n"
+                    f"  missing: {set(CSV_FIELDNAMES) - set(baseline_row.keys())}"
+                )
 
-            skill_scores = run_sequential(skill_args, desc="with_skill")
-            baseline_scores = run_sequential(baseline_args, desc="baseline  ")
+                csv_rows.extend([skill_row, baseline_row])
 
-            skill_metrics = calculate_metrics(skill_scores)
-            baseline_metrics = calculate_metrics(baseline_scores)
-            gain_result = calculate_skill_gain(
-                skill_scores, baseline_scores, benchmark_id
-            )
-            skill_kappa = calculate_cohens_kappa(skill_scores)
-            baseline_kappa = calculate_cohens_kappa(baseline_scores)
+        except KeyboardInterrupt:
+            print("\n  ⚠️  Interrupted — checkpoint saved, run again to resume")
+            logger.info("Interrupted by user")
 
-            print_test_case_result(
-                tc["id"], tc["label"], tc_type,
-                skill_metrics, baseline_metrics,
-                gain_result, skill_kappa, baseline_kappa
-            )
-
-            skill_all_scores.extend(skill_scores)
-            baseline_all_scores.extend(baseline_scores)
-
-            ts = time.strftime("%Y-%m-%d %H:%M:%S")
-
-            skill_row = {
-                "timestamp": ts,
-                "benchmark_id": benchmark_id,
-                "scenario": scenario or "",
-                "test_case": tc["id"],
-                "skill_path": skill_path,
-                "skill_hash": metadata["skill_hash"],
-                "condition": "with_skill",
-                "provider": provider,
-                "model": model,
-                "n_runs": n_runs,
-                "pass_rate": skill_metrics["pass_rate"],
-                "consistency": skill_metrics["consistency"],
-                "final_score": skill_metrics["final_score"],
-                "kappa": skill_kappa,
-                "gain": gain_result["gain"],
-                "efficacy": gain_result["efficacy"],
-                "absolute_tier": gain_result["absolute_tier"],
-                "meets_quality_floor": gain_result["meets_quality_floor"],
-                "quality_floor": gain_result["quality_floor"],
-                "diagnosis": gain_result["diagnosis"]
-            }
-
-            baseline_row = {
-                "timestamp": ts,
-                "benchmark_id": benchmark_id,
-                "scenario": scenario or "",
-                "test_case": tc["id"],
-                "skill_path": skill_path,
-                "skill_hash": metadata["skill_hash"],
-                "condition": "baseline",
-                "provider": provider,
-                "model": model,
-                "n_runs": n_runs,
-                "pass_rate": baseline_metrics["pass_rate"],
-                "consistency": baseline_metrics["consistency"],
-                "final_score": baseline_metrics["final_score"],
-                "kappa": baseline_kappa,
-                "gain": 0.0,
-                "efficacy": "N/A",
-                "absolute_tier": _get_absolute_tier(baseline_metrics["pass_rate"]),
-                "meets_quality_floor": "",
-                "quality_floor": gain_result["quality_floor"],
-                "diagnosis": "N/A"
-            }
-
-            assert set(skill_row.keys()) == set(CSV_FIELDNAMES), (
-                f"skill_row keys mismatch CSV_FIELDNAMES\n"
-                f"  extra  : {set(skill_row.keys()) - set(CSV_FIELDNAMES)}\n"
-                f"  missing: {set(CSV_FIELDNAMES) - set(skill_row.keys())}"
-            )
-            assert set(baseline_row.keys()) == set(CSV_FIELDNAMES), (
-                f"baseline_row keys mismatch CSV_FIELDNAMES\n"
-                f"  extra  : {set(baseline_row.keys()) - set(CSV_FIELDNAMES)}\n"
-                f"  missing: {set(CSV_FIELDNAMES) - set(baseline_row.keys())}"
-            )
-
-            csv_rows.extend([skill_row, baseline_row])
-
-    except KeyboardInterrupt:
-        print("\n  ⚠️  Interrupted — saving partial results...")
-    finally:
-        if csv_rows:
-            save_to_csv(csv_rows)
-            print(f"\n  💾 Results saved → experiments/results.csv ({len(csv_rows)} rows)")
+        finally:
+            if csv_rows:
+                save_to_csv(csv_rows)
+                print(f"\n  💾 Results saved → experiments/results.csv ({len(csv_rows)} rows)")
+                logger.info(f"Results saved: {len(csv_rows)} rows")
 
     if not skill_all_scores:
         print("  No results to summarize.")
         return {}
 
-    overall_gain = calculate_skill_gain(
-        skill_all_scores, baseline_all_scores, benchmark_id
-    )
-
+    overall_gain = calculate_skill_gain(skill_all_scores, baseline_all_scores, benchmark_id)
     elapsed = time.time() - start_time
     print_overall_summary(benchmark_id, overall_gain, len(test_cases), elapsed)
+
+    # 实验完整完成，清除断点
+    clear_checkpoint()
+    logger.info(f"Benchmark {benchmark_id} completed in {elapsed:.1f}s")
 
     return overall_gain
 
@@ -387,24 +451,18 @@ Examples:
     )
     parser.add_argument("--skill", required=True, help="Path to SKILL.md file")
     parser.add_argument("--benchmark", required=True, choices=["b1", "b2", "b3"])
-    parser.add_argument("--provider", default="moonshot", choices=["moonshot", "anthropic"])
-    parser.add_argument("--model", default="kimi-k2.5")
-    parser.add_argument("--temperature", type=float, default=0.6)
-    parser.add_argument("--n-runs", type=int, default=5)
+    parser.add_argument("--n-runs", type=int, default=3)
     parser.add_argument("--scenario", default=None,
                         help="B2 only: b2b / consumer / internal")
 
     args = parser.parse_args()
 
-    run_benchmark(
+    asyncio.run(run_benchmark(
         skill_path=args.skill,
         benchmark_id=args.benchmark,
-        provider=args.provider,
-        model=args.model,
-        temperature=args.temperature,
         n_runs=args.n_runs,
         scenario=args.scenario
-    )
+    ))
 
 
 if __name__ == "__main__":
