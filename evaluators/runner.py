@@ -7,13 +7,6 @@ from dataclasses import dataclass, field
 from typing import Any
 from pathlib import Path
 
-from tenacity import (
-    retry,
-    stop_after_attempt,
-    wait_exponential,
-    retry_if_not_exception_type
-)
-
 
 @dataclass
 class AgentExecutionResult:
@@ -58,23 +51,13 @@ def build_metadata(
     }
 
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=2, max=10),
-    retry=retry_if_not_exception_type((ValueError, EnvironmentError))
-)
 def _call_moonshot(
     system_prompt: str,
     user_prompt: str,
     model: str,
     temperature: float
 ) -> AgentExecutionResult:
-    """
-    调用 Kimi API（中国平台）
-
-    kimi-k2.5 instant mode 强制要求 temperature=0.6
-    retry 不重试 ValueError 和 EnvironmentError（配置错误，重试无意义）
-    """
+    """调用 Kimi API（中国平台）单次调用"""
     from openai import OpenAI
 
     api_key = os.environ.get("MOONSHOT_API_KEY")
@@ -122,26 +105,17 @@ def _call_moonshot(
             "completion_tokens": response.usage.completion_tokens,
             "model": response.model
         },
-        raw_response=response
+        raw_response=None  # 不传递 raw_response，避免 pickle 问题
     )
 
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=2, max=10),
-    retry=retry_if_not_exception_type((ValueError, EnvironmentError))
-)
 def _call_anthropic(
     system_prompt: str,
     user_prompt: str,
     model: str,
     temperature: float
 ) -> AgentExecutionResult:
-    """
-    调用 Claude API
-
-    retry 不重试 ValueError 和 EnvironmentError（配置错误，重试无意义）
-    """
+    """调用 Claude API 单次调用"""
     import anthropic
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -172,8 +146,37 @@ def _call_anthropic(
             "output_tokens": response.usage.output_tokens,
             "model": response.model
         },
-        raw_response=response
+        raw_response=None  # 不传递 raw_response，避免 pickle 问题
     )
+
+
+def _call_with_retry(
+    call_fn,
+    *args,
+    max_attempts: int = 3
+) -> AgentExecutionResult:
+    """
+    手动重试机制，替代 tenacity @retry 装饰器
+
+    原因：tenacity 内部使用 RLock，在 Python 3.14 spawn 模式下
+    无法被 pickle 序列化传递给子进程，导致 ProcessPoolExecutor 报错。
+    改用手动重试完全避开这个问题。
+
+    不重试：ValueError、EnvironmentError（配置错误，重试无意义）
+    重试：其他异常（网络错误、API 超时等）
+    """
+    last_error = None
+    for attempt in range(max_attempts):
+        try:
+            return call_fn(*args)
+        except (ValueError, EnvironmentError):
+            raise
+        except Exception as e:
+            last_error = e
+            if attempt < max_attempts - 1:
+                wait = 2 ** attempt
+                time.sleep(wait)
+    raise last_error
 
 
 def run_surrogate_agent(
@@ -202,11 +205,9 @@ def run_surrogate_agent(
 
     if provider == "moonshot":
         temperature = 0.6
-
-    if provider == "moonshot":
-        return _call_moonshot(system_prompt, user_input, model, temperature)
+        return _call_with_retry(_call_moonshot, system_prompt, user_input, model, temperature)
     elif provider == "anthropic":
-        return _call_anthropic(system_prompt, user_input, model, temperature)
+        return _call_with_retry(_call_anthropic, system_prompt, user_input, model, temperature)
     else:
         raise ValueError(
             f"Unsupported provider: {provider}. Use 'moonshot' or 'anthropic'."
