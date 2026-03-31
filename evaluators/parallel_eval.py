@@ -27,10 +27,18 @@ from evaluators.gain_calculator import (
     _get_absolute_tier
 )
 
-# ── 日志配置 ──────────────────────────────────────────────
+# ── 路径配置（全部使用绝对路径，避免工作目录问题）────────
 
-Path("logs").mkdir(exist_ok=True)
-LOG_FILE = f"logs/benchmark_{datetime.now():%m%d_%H%M%S}.log"
+BASE_DIR = Path(__file__).parent.parent
+EXPERIMENTS_DIR = BASE_DIR / "experiments"
+SAMPLES_DIR = EXPERIMENTS_DIR / "samples"
+LOGS_DIR = BASE_DIR / "logs"
+CHECKPOINT_FILE = EXPERIMENTS_DIR / "checkpoint.json"
+
+LOGS_DIR.mkdir(exist_ok=True)
+SAMPLES_DIR.mkdir(parents=True, exist_ok=True)
+
+LOG_FILE = str(LOGS_DIR / f"benchmark_{datetime.now():%m%d_%H%M%S}.log")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -41,34 +49,30 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-CHECKPOINT_FILE = "experiments/checkpoint.json"
-SAMPLES_DIR = Path("experiments/samples")
 TASK_SEMAPHORE_SIZE = 3
 
 
 # ── 断点续传 ──────────────────────────────────────────────
 
 def load_checkpoint() -> dict:
-    path = Path(CHECKPOINT_FILE)
-    if path.exists():
-        data = json.loads(path.read_text(encoding="utf-8"))
+    if CHECKPOINT_FILE.exists():
+        data = json.loads(CHECKPOINT_FILE.read_text(encoding="utf-8"))
         logger.info(f"Checkpoint loaded: {len(data.get('completed_runs', []))} runs completed")
         return data
     return {"completed_runs": [], "results": []}
 
 
 def save_checkpoint(checkpoint: dict) -> None:
-    Path(CHECKPOINT_FILE).parent.mkdir(exist_ok=True)
-    Path(CHECKPOINT_FILE).write_text(
+    CHECKPOINT_FILE.parent.mkdir(exist_ok=True)
+    CHECKPOINT_FILE.write_text(
         json.dumps(checkpoint, ensure_ascii=False, indent=2),
         encoding="utf-8"
     )
 
 
 def clear_checkpoint() -> None:
-    path = Path(CHECKPOINT_FILE)
-    if path.exists():
-        path.unlink()
+    if CHECKPOINT_FILE.exists():
+        CHECKPOINT_FILE.unlink()
         logger.info("Checkpoint cleared — experiment completed successfully")
 
 
@@ -80,7 +84,8 @@ def make_run_id(
     condition: str,
     run_idx: int
 ) -> str:
-    skill_hash = compute_sha256(skill_path)[:8]
+    # 去掉 "sha256:" 前缀，只取 hex 部分，避免冒号导致 Windows 文件名问题
+    skill_hash = compute_sha256(skill_path).replace("sha256:", "")[:8]
     scenario_part = f"_{scenario}" if scenario else ""
     return f"{skill_hash}_{benchmark_id}{scenario_part}_{tc_id}_{condition}_{run_idx}"
 
@@ -94,14 +99,7 @@ def save_sample(
     use_skill: bool,
     prompt: str
 ) -> None:
-    """
-    保存单次运行的详细样本，用于人工审查
-
-    文件存储在 experiments/samples/<run_id>.json
-    包含：PRD 完整内容、每条断言的判断结果和理由
-    """
-    SAMPLES_DIR.mkdir(parents=True, exist_ok=True)
-
+    """保存单次运行的详细样本，用于人工审查"""
     sample = {
         "run_id": run_id,
         "condition": "with_skill" if use_skill else "baseline",
@@ -112,7 +110,10 @@ def save_sample(
         "llm_assertions": llm_results.get("results", []),
         "rule_score": rule_results.get("rule_score", 0),
         "llm_score": llm_results.get("llm_score", 0),
-        "total_max": rule_results.get("rule_max_score", 0) + llm_results.get("llm_max_score", 0)
+        "total_max": (
+            rule_results.get("rule_max_score", 0) +
+            llm_results.get("llm_max_score", 0)
+        )
     }
 
     sample_path = SAMPLES_DIR / f"{run_id}.json"
@@ -120,7 +121,7 @@ def save_sample(
         json.dumps(sample, ensure_ascii=False, indent=2),
         encoding="utf-8"
     )
-    logger.info(f"[SAMPLE] Saved {sample_path}")
+    logger.info(f"[SAMPLE] Saved {sample_path.name}")
 
 
 # ── 可视化工具 ────────────────────────────────────────────
@@ -191,7 +192,7 @@ def print_overall_summary(
     print(f"  {'Test cases      :':<20} {total_cases}")
     print(f"  {'Elapsed time    :':<20} {elapsed:.1f}s ({elapsed/60:.1f}min)")
     print(f"  {'Log file        :':<20} {LOG_FILE}")
-    print(f"  {'Samples dir     :':<20} experiments/samples/")
+    print(f"  {'Samples dir     :':<20} {SAMPLES_DIR}")
     print(f"{'='*60}\n")
 
 
@@ -283,7 +284,7 @@ async def run_benchmark(
     """运行完整的 benchmark 评估（async，支持断点续传）"""
     start_time = time.time()
 
-    test_cases_path = Path(f"benchmark/test_cases/{benchmark_id}_inputs.json")
+    test_cases_path = BASE_DIR / f"benchmark/test_cases/{benchmark_id}_inputs.json"
     test_cases_data = json.loads(test_cases_path.read_text(encoding="utf-8"))
     test_cases = test_cases_data["test_cases"]
 
@@ -317,8 +318,8 @@ async def run_benchmark(
     print(f"\n  📊 Test breakdown: {standard_count} standard + {edge_count} edge cases")
 
     semaphore = asyncio.Semaphore(TASK_SEMAPHORE_SIZE)
-
     connector = aiohttp.TCPConnector(limit=TASK_SEMAPHORE_SIZE * 2)
+
     async with aiohttp.ClientSession(connector=connector) as session:
         try:
             for i, tc in enumerate(test_cases, 1):
