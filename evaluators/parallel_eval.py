@@ -42,6 +42,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 CHECKPOINT_FILE = "experiments/checkpoint.json"
+SAMPLES_DIR = Path("experiments/samples")
 TASK_SEMAPHORE_SIZE = 3
 
 
@@ -82,6 +83,44 @@ def make_run_id(
     skill_hash = compute_sha256(skill_path)[:8]
     scenario_part = f"_{scenario}" if scenario else ""
     return f"{skill_hash}_{benchmark_id}{scenario_part}_{tc_id}_{condition}_{run_idx}"
+
+
+def save_sample(
+    run_id: str,
+    prd_content: str,
+    rule_results: dict,
+    llm_results: dict,
+    normalized_score: float,
+    use_skill: bool,
+    prompt: str
+) -> None:
+    """
+    保存单次运行的详细样本，用于人工审查
+
+    文件存储在 experiments/samples/<run_id>.json
+    包含：PRD 完整内容、每条断言的判断结果和理由
+    """
+    SAMPLES_DIR.mkdir(parents=True, exist_ok=True)
+
+    sample = {
+        "run_id": run_id,
+        "condition": "with_skill" if use_skill else "baseline",
+        "prompt": prompt,
+        "normalized_score": normalized_score,
+        "prd_content": prd_content,
+        "rule_assertions": rule_results.get("results", []),
+        "llm_assertions": llm_results.get("results", []),
+        "rule_score": rule_results.get("rule_score", 0),
+        "llm_score": llm_results.get("llm_score", 0),
+        "total_max": rule_results.get("rule_max_score", 0) + llm_results.get("llm_max_score", 0)
+    }
+
+    sample_path = SAMPLES_DIR / f"{run_id}.json"
+    sample_path.write_text(
+        json.dumps(sample, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+    logger.info(f"[SAMPLE] Saved {sample_path}")
 
 
 # ── 可视化工具 ────────────────────────────────────────────
@@ -152,6 +191,7 @@ def print_overall_summary(
     print(f"  {'Test cases      :':<20} {total_cases}")
     print(f"  {'Elapsed time    :':<20} {elapsed:.1f}s ({elapsed/60:.1f}min)")
     print(f"  {'Log file        :':<20} {LOG_FILE}")
+    print(f"  {'Samples dir     :':<20} experiments/samples/")
     print(f"{'='*60}\n")
 
 
@@ -166,9 +206,10 @@ async def evaluate_single_run(
     benchmark_id: str,
     scenario: str | None,
     run_id: str,
-    checkpoint: dict
+    checkpoint: dict,
+    prompt: str
 ) -> dict:
-    """单次评估（async），支持断点续传"""
+    """单次评估（async），支持断点续传，保存详细样本"""
     if run_id in checkpoint["completed_runs"]:
         cached = next(
             (r for r in checkpoint["results"] if r.get("run_id") == run_id),
@@ -202,6 +243,17 @@ async def evaluate_single_run(
 
         elapsed = time.time() - start
         logger.info(f"[DONE] {run_id} | score={normalized:.3f} | {elapsed:.1f}s")
+
+        # 保存详细样本（透明化黑箱）
+        save_sample(
+            run_id=run_id,
+            prd_content=result.content,
+            rule_results=rule_results,
+            llm_results=llm_results,
+            normalized_score=normalized,
+            use_skill=use_skill,
+            prompt=prompt
+        )
 
         run_result = {
             "run_id": run_id,
@@ -288,7 +340,8 @@ async def run_benchmark(
                 skill_tasks = [
                     evaluate_single_run(
                         session, semaphore, skill_path, tc["prompt"],
-                        True, benchmark_id, scenario, run_id, checkpoint
+                        True, benchmark_id, scenario, run_id, checkpoint,
+                        tc["prompt"]
                     )
                     for run_id in skill_run_ids
                 ]
@@ -312,7 +365,8 @@ async def run_benchmark(
                 baseline_tasks = [
                     evaluate_single_run(
                         session, semaphore, skill_path, tc["prompt"],
-                        False, benchmark_id, scenario, run_id, checkpoint
+                        False, benchmark_id, scenario, run_id, checkpoint,
+                        tc["prompt"]
                     )
                     for run_id in baseline_run_ids
                 ]
