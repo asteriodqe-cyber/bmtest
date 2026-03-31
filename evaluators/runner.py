@@ -10,11 +10,11 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 MOONSHOT_BASE_URL = "https://api.moonshot.cn/v1/chat/completions"
 MOONSHOT_MODEL = "kimi-k2.5"
-MOONSHOT_TEMPERATURE = 0.6
+MOONSHOT_TEMPERATURE = 1
 CONNECT_TIMEOUT = 5
 READ_TIMEOUT = 90
 
@@ -76,7 +76,8 @@ async def _call_kimi_stream(
     """
     import aiohttp
 
-    api_key = os.environ.get("MOONSHOT_API_KEY")
+    # .strip() 防止换行符或空格导致 header injection 错误
+    api_key = os.environ.get("MOONSHOT_API_KEY", "").strip()
     if not api_key:
         raise EnvironmentError(
             "MOONSHOT_API_KEY not set. "
