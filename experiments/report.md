@@ -144,4 +144,201 @@ python evaluators/parallel_eval.py \
 
 ---
 
-## 结论（待填写）
+## 结论（待填写
+
+# PRD Skill Benchmark — 实验报告
+
+**版本**：v1.0  
+**日期**：2026-03-31  
+**Repo**：asteriodqe-cyber/bmtest（Private）
+
+---
+
+## 一、实验概述
+
+### 1.1 评估目标
+
+本实验评估的不是 PRD 本身的质量，而是 **Agent 生成 PRD Skill 的能力**。
+
+Skill 是一种可复用的指令文件，决定了 Agent 在特定任务上的行为上限。核心问题是：
+
+> Agent 生成的 Skill，能否让另一个 Agent 持续产出高质量 PRD？
+
+### 1.2 实验设计
+
+**被评估者**：Kimi K2.5（生成 PRD）  
+**评估者**：Claude Sonnet 4.6（LLM Judge，避免自我评估偏差）  
+**核心指标**：Skill Gain = (with_skill得分 - baseline得分) / (1 - baseline得分)
+
+**两个待测 Skill 版本**：
+
+| 版本 | 生成方式 | 文件路径 |
+|---|---|---|
+| zero_shot | Kimi K2.5 快速模式，无示例直接生成 | `datasets/generated_skills/zero_shot/skill_v1.md` |
+| few_shot | Kimi K2.5 思考模式，参考 baseline + prd-taskmaster | `datasets/generated_skills/few_shot/skill_v1.md` |
+
+**Baseline Skill 设计参考**：融入了 [prd-taskmaster](https://skills.sh/anombyte93/prd-taskmaster/prd-taskmaster) 的核心设计思想，由 Kimi K2.5 思考模式提取，包括质量分级、13 项验证检查思路、用户测试检查点概念。
+
+### 1.3 三个 Benchmark 设计逻辑
+
+三个 Benchmark 形成能力阶梯：结构合规（能力基线）→ 场景适配（判断力）→ 流程编排（系统能力）
+
+| Benchmark | 测试内容 | 评估方式 |
+|---|---|---|
+| B1 基础结构合规性 | Skill 能否引导产出结构完整的 PRD | Rule 断言 + Claude 批量 Judge |
+| B2 条件场景适配 | Skill 能否根据 B2B/C端/内部工具调整风格 | 多场景断言验证 |
+| B3 流程编排完整性 | Skill 能否引导 PRD→任务拆解且语义关联 | 步骤 + 依赖断言 |
+
+---
+
+## 二、评估框架说明
+
+### 2.1 双层评估体系
+
+**第一层：Rule-based 断言**
+- 关键词匹配、章节顺序验证
+- 完全自动化，零成本，可复现
+- 适合格式合规性检查
+
+**第二层：LLM-as-Judge（Claude Sonnet）**
+- 批量评估语义层面质量，5 条断言合并为 1 次 API 调用
+- 使用不同模型（Kimi 生成，Claude 评估），避免自我评估偏差
+- 适合存在性和内容质量检查
+
+### 2.2 质量分级
+
+| Tier | pass_rate | 含义 |
+|---|---|---|
+| A | ≥ 0.80 | 优秀 |
+| B | 0.60 - 0.79 | 良好，达到质量门槛 |
+| C | 0.40 - 0.59 | 合格，需改进 |
+| D | < 0.40 | 不合格 |
+
+### 2.3 Skill Gain 解读
+
+| Gain | Efficacy | 含义 |
+|---|---|---|
+| > 0.50 | HIGH 🟢 | Skill 带来显著提升 |
+| 0.20 - 0.50 | MEDIUM 🟡 | Skill 有一定价值 |
+| < 0.20 | LOW 🔴 | Skill 提升不明显 |
+
+---
+
+## 三、已知偏差与局限性
+
+### 3.1 temperature=1.0 随机性
+
+Kimi K2.5 流式模式强制要求 temperature=1.0，导致多次运行结果有波动。缓解方式：n_runs=3 取平均，但统计噪音仍存在，体现在部分 case 的 Kappa=0.000。
+
+### 3.2 Rule 断言关键词覆盖不足（人工复核发现）
+
+经人工复核 `experiments/samples/` 中的样本文件，发现 Rule 断言在存在性检查上存在系统性低估：
+
+**b1_04（用户场景）**：PRD 使用"核心使用场景"，未被关键词 `['用户场景', '用例', 'User Stories']` 匹配，误判为失败。
+
+**b1_10/b1_11（验收标准/度量指标）**：验收逻辑散落在各功能点中，LLM Judge 正确识别（b1_21 confidence=0.75），但 Rule 断言因章节标题不匹配判定失败。Rule 与 LLM 判断出现矛盾。
+
+**b1_15（章节顺序）**：复合标题"背景与目标"导致顺序检查误判。
+
+**结论**：Rule 断言适合格式合规性检查（如用户故事是否三段式），不适合存在性检查。LLM Judge 在语义理解上更接近真实质量。基于人工复核，zero_shot B1 实际质量约 0.75，当前自动评估 0.636 因 Rule 断言误判偏低约 0.10-0.15。
+
+### 3.3 LLM Judge 非完美
+
+Claude 的判断标准可能与人类评审有偏差。缓解方式：所有运行的详细样本保存在 `experiments/samples/`，支持人工复核。
+
+---
+
+## 四、实验结果
+
+### 4.1 B1 基础结构合规性
+
+**测试配置**：7 cases（5 standard + 2 edge），n_runs=3，Kimi K2.5，temperature=1.0
+
+#### zero_shot 结果
+
+| Case | 场景 | with_skill | baseline | Gain | Efficacy | Tier |
+|---|---|---|---|---|---|---|
+| b1_tc_01 | 电商购物车 | 0.596 | 0.550 | +0.103 | LOW 🔴 | C |
+| b1_tc_02 | 社交点赞 | 0.717 | 0.521 | +0.410 | MEDIUM 🟡 | B |
+| b1_tc_03 | 用户注册登录 | 0.683 | 0.570 | +0.262 | MEDIUM 🟡 | B |
+| b1_tc_04 | 消息通知 | 0.543 | 0.449 | +0.170 | LOW 🔴 | C |
+| b1_tc_05 | 搜索功能 | 0.659 | 0.583 | +0.184 | LOW 🔴 | B |
+| b1_tc_edge_01 | 极简需求描述 | 0.624 | 0.510 | +0.232 | MEDIUM 🟡 | B |
+| b1_tc_edge_02 | 跨平台复杂需求 | 0.627 | 0.499 | +0.256 | MEDIUM 🟡 | B |
+| **整体** | | **0.636** | **0.526** | **+0.231** | **MEDIUM 🟡** | **B** |
+
+**few_shot 结果**：待补充
+
+#### B1 小结
+
+- zero_shot Skill 整体达到 Tier-B，Gain=+0.231，通过质量门槛
+- Skill 在"社交点赞"场景效果最显著（Gain=+0.410），在"电商购物车"效果最弱（Gain=+0.103）
+- Edge case 表现稳定，说明 Skill 对复杂场景也有帮助
+
+### 4.2 B2 条件场景适配
+
+待补充
+
+### 4.3 B3 流程编排完整性
+
+待补充
+
+---
+
+## 五、zero_shot vs few_shot 对比
+
+待补充（需要 few_shot 实验数据）
+
+---
+
+## 六、评估器改进建议
+
+### 6.1 Rule 断言修正建议
+```json
+{
+  "id": "b1_04",
+  "check": "包含'用户场景'或'用例'或'User Stories'或'核心使用场景'或'场景'",
+  "type": "structural"
+},
+{
+  "id": "b1_10",
+  "method": "llm",
+  "check": "文档是否在功能需求中明确定义了验收标准或业务规则"
+}
+```
+
+### 6.2 Rule vs LLM 权重建议
+
+| 检查类型 | 建议方式 | 原因 |
+|---|---|---|
+| 存在性检查 | LLM | 关键词匹配无法覆盖所有表达方式 |
+| 格式合规性 | Rule | 格式有明确标准 |
+| 内容质量 | LLM | 语义理解必须依赖 LLM |
+
+### 6.3 顺序检查优化
+
+`check_section_order` 函数应处理复合标题，如"背景与目标"应分别识别为"背景"和"目标"两个锚点。
+
+---
+
+## 七、扩展性说明
+
+本框架不局限于 PRD 场景，只需替换断言定义和测试用例即可迁移到其他 Skill 类型。
+
+**与现有框架的差异化定位**：
+
+| 框架 | 评估对象 | 区别 |
+|---|---|---|
+| DeepEval / G-Eval | LLM 输出质量 | 评估单次输出，不评估 Skill 文件本身 |
+| SkillsBench | 已有 Skill 的执行效果 | 假设 Skill 已存在，不评估 Skill 生成能力 |
+| **本项目** | Agent 生成 Skill 的能力 | 评估从零生成 Skill 的增量价值 |
+
+---
+
+## 八、变更记录
+
+| 日期 | 变更内容 |
+|---|---|
+| 2026-03-31 | B1 zero_shot 实验完成，发现 Rule 断言误判问题 |
+| 待补充 | B2/B3 实验结果 |
+| 待补充 | few_shot 对比实验结果 |
