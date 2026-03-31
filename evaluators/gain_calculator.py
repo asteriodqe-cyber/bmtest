@@ -13,6 +13,15 @@ except ImportError:
     HAS_FILELOCK = False
 
 
+# ── 质量下限配置 ──────────────────────────────────────────
+
+QUALITY_FLOOR = {
+    "b1": 0.60,  # 基础结构，要求较高
+    "b2": 0.55,  # 条件适配，允许略低
+    "b3": 0.55   # 流程编排，允许略低（任务更复杂）
+}
+
+
 # ── 类型定义 ──────────────────────────────────────────────
 
 class MetricsResult(TypedDict):
@@ -30,16 +39,22 @@ class GainResult(TypedDict):
     baseline_final_score: float
     gain: float
     efficacy: str
+    absolute_tier: str
+    meets_quality_floor: bool
+    quality_floor: float
+    diagnosis: str
 
 
-# ── CSV 字段定义（单一来源，parallel_eval 和 save_to_csv 共用）──
+# ── CSV 字段定义（单一来源）──────────────────────────────
 
 CSV_FIELDNAMES = [
     "timestamp", "benchmark_id", "scenario", "test_case",
     "skill_path", "skill_hash", "condition",
     "provider", "model", "n_runs",
     "pass_rate", "consistency", "final_score", "kappa",
-    "gain", "efficacy"
+    "gain", "efficacy",
+    "absolute_tier", "meets_quality_floor", "quality_floor",
+    "diagnosis"
 ]
 
 
@@ -49,17 +64,10 @@ def calculate_metrics(results: list[float]) -> MetricsResult:
     """
     计算单组运行结果的核心指标
 
-    Args:
-        results: 每次运行的归一化得分列表（0-1 之间）
-
-    Returns:
-        MetricsResult: pass_rate, consistency, final_score
-
     Notes:
         - len < 2 时不调用 stdev（会抛 StatisticsError）
-        - pass_rate 为 0.0 或 1.0 时 std=0，consistency 直接设为 1.0
-        - consistency 归一化基于二元结果最大 std=0.5
-        - final_score = 0.6 * pass_rate + 0.4 * consistency（能力主导）
+        - pass_rate 为 0.0 或 1.0 时 consistency 直接设为 1.0
+        - final_score = 0.6 * pass_rate + 0.4 * consistency
     """
     if not results:
         return MetricsResult(pass_rate=0.0, consistency=0.0, final_score=0.0)
@@ -82,17 +90,92 @@ def calculate_metrics(results: list[float]) -> MetricsResult:
     )
 
 
+# ── 绝对质量评估 ──────────────────────────────────────────
+
+def _get_absolute_tier(score: float) -> str:
+    """
+    绝对质量分级
+
+    A (≥0.8): 可直接用于开发，无需修改
+    B (0.6-0.79): 需产品经理微调，框架完整
+    C (0.4-0.59): 结构合规但内容空洞，需重写
+    D (<0.4): 基本不可用
+    """
+    if score >= 0.8:
+        return "A"
+    if score >= 0.6:
+        return "B"
+    if score >= 0.4:
+        return "C"
+    return "D"
+
+
+def _calculate_efficacy(
+    gain: float,
+    skill_score: float
+) -> str:
+    """
+    二维 efficacy 判定：同时考虑绝对质量和相对增益
+
+    硬底线：skill_score < 0.5 直接判 low，无论 gain 多高
+    high：高增益（>0.5）且绝对质量达 B 级（≥0.6）
+    medium：中等增益（>0.2）且绝对质量达 C 级（≥0.5）
+    low：其他情况
+    """
+    if skill_score < 0.5:
+        return "low"
+    if gain > 0.5 and skill_score >= 0.6:
+        return "high"
+    if gain > 0.2 and skill_score >= 0.5:
+        return "medium"
+    return "low"
+
+
+def _generate_diagnosis(
+    gain: float,
+    tier: str,
+    meets_floor: bool,
+    skill_score: float
+) -> str:
+    """
+    生成一句话诊断，帮助用户快速定位问题
+
+    四种典型情况：
+    1. 绝对质量不足
+    2. 增益不足（Skill 无效）
+    3. 高增益但低绝对质量（矛盾场景：Skill 框架对但内容浅）
+    4. 正常
+    """
+    if not meets_floor:
+        return f"绝对质量不足（{tier}级，需提升至B级以上，当前={skill_score:.2f}）"
+    if gain < 0.2:
+        return f"增益不足（Gain={gain:.3f}），Skill 未带来显著提升"
+    if tier == "C" and gain > 0.5:
+        return "高增益但绝对质量低：Skill 框架正确但 instructions 内容深度不足，建议优化"
+    return "正常"
+
+
+# ── Skill Gain 计算 ───────────────────────────────────────
+
 def calculate_skill_gain(
     skill_scores: list[float],
-    baseline_scores: list[float]
+    baseline_scores: list[float],
+    benchmark_id: str = "b1"
 ) -> GainResult:
     """
     计算 Skill Gain：有 Skill 相比无 Skill 的增量价值
 
     公式：Gain = (skill_score - baseline_score) / (1 - baseline_score)
 
-    当 baseline_score >= 1.0 时 gain=0（无提升空间）
-    gain > 0.5 → high，> 0.2 → medium，其他 → low
+    新增二维评估：
+    - absolute_tier: 绝对质量分级（A/B/C/D）
+    - meets_quality_floor: 是否达到质量下限
+    - diagnosis: 一句话诊断
+
+    Args:
+        skill_scores:    with_skill 条件的得分列表
+        baseline_scores: baseline 条件的得分列表
+        benchmark_id:    用于查询 QUALITY_FLOOR（默认 b1）
     """
     skill_metrics = calculate_metrics(skill_scores)
     baseline_metrics = calculate_metrics(baseline_scores)
@@ -107,12 +190,11 @@ def calculate_skill_gain(
 
     gain = round(gain, 4)
 
-    if gain > 0.5:
-        efficacy = "high"
-    elif gain > 0.2:
-        efficacy = "medium"
-    else:
-        efficacy = "low"
+    floor = QUALITY_FLOOR.get(benchmark_id, 0.5)
+    absolute_tier = _get_absolute_tier(skill_score)
+    meets_floor = skill_score >= floor
+    efficacy = _calculate_efficacy(gain, skill_score)
+    diagnosis = _generate_diagnosis(gain, absolute_tier, meets_floor, skill_score)
 
     return GainResult(
         skill_pass_rate=skill_score,
@@ -122,9 +204,15 @@ def calculate_skill_gain(
         baseline_consistency=baseline_metrics["consistency"],
         baseline_final_score=baseline_metrics["final_score"],
         gain=gain,
-        efficacy=efficacy
+        efficacy=efficacy,
+        absolute_tier=absolute_tier,
+        meets_quality_floor=meets_floor,
+        quality_floor=floor,
+        diagnosis=diagnosis
     )
 
+
+# ── Cohen's Kappa ─────────────────────────────────────────
 
 def calculate_cohens_kappa(
     scores: list[float],
@@ -133,25 +221,8 @@ def calculate_cohens_kappa(
     """
     标准 Cohen's Kappa（二分类，O(n) 优化版）
 
-    将连续分数转为二元（pass/fail），利用组合数学计算
-    多次运行之间的分类一致性，无需两两枚举。
-
     公式：Kappa = (P_o - P_e) / (1 - P_e)
-    - P_o = (C(n_pass,2) + C(n_fail,2)) / C(n,2)  观察一致率
-    - P_e = p_pass² + p_fail²                       期望一致率
-
-    复杂度：O(n)，适用于任意规模（包括 n_runs=1000+ 的大规模测试）
-
-    与 consistency 的区别：
-    - consistency：基于方差的连续值稳定性指标
-    - kappa：基于分类一致率的统计指标，更严格，有标准统计学解释
-
-    Args:
-        scores:    每次运行的归一化得分列表
-        threshold: 通过/失败的分界线，默认 0.6
-
-    Returns:
-        kappa ∈ [0, 1]，1 表示完全一致，0 表示随机水平
+    复杂度：O(n)，适用于任意规模
     """
     if len(scores) < 2:
         return 1.0
@@ -168,7 +239,6 @@ def calculate_cohens_kappa(
     pairs_fail = n_fail * (n_fail - 1) / 2
 
     p_o = (pairs_pass + pairs_fail) / total_pairs
-
     p_pass = n_pass / n
     p_e = p_pass ** 2 + (1.0 - p_pass) ** 2
 
@@ -188,16 +258,10 @@ def save_to_csv(
     """
     进程安全的 CSV 写入
 
-    设计原则：
-    - 字段定义使用 CSV_FIELDNAMES 常量（与 parallel_eval 共用，单一来源）
-    - 有 filelock：FileLock(timeout=30) 防止并发写入和死锁
-    - 无 filelock：回退串行写入并发出警告
-    - 锁内用 f.tell()==0 判断是否写 header（比检查文件存在更可靠）
-    - 缺失字段自动填空字符串，不会因字段缺失抛异常
-
-    大规模测试建议：
-    - n_runs > 50 时建议预先 pip install filelock 确保锁保护
-    - 若单次写入 results 超过 10k 行，可考虑改用 sqlite 替代 CSV
+    - CSV_FIELDNAMES 单一来源，parallel_eval 共用
+    - FileLock(timeout=30) 防并发写入和死锁
+    - f.tell()==0 判断是否写 header
+    - 大规模测试（>10k行）建议改用 sqlite
     """
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
