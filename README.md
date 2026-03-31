@@ -149,7 +149,7 @@ python evaluators/runner.py \
 - [Kimi K2.5 API 文档](https://platform.moonshot.ai/docs/guide/kimi-k2-5-quickstart)
 - [τ-Bench: pass^k 可靠性指标](https://arxiv.org/abs/2406.12045)
 - [AgentBench: 将 LLM 作为 Agent 评估](https://openreview.net/forum?id=zAdUB0aCTQ)
-
+- [prd-taskmaster Skill（设计思想参考）](https://skills.sh/anombyte93/prd-taskmaster/prd-taskmaster) — 由 Kimi K2.5 思考模式提取核心设计思想，融入 baseline Skill 设计
 ---
 
 <a name="english"></a>
@@ -293,3 +293,4 @@ All experiments automatically record the following metadata for reproducibility:
 - [Kimi K2.5 API Docs](https://platform.moonshot.ai/docs/guide/kimi-k2-5-quickstart)
 - [τ-Bench: pass^k reliability metric](https://arxiv.org/abs/2406.12045)
 - [AgentBench: Evaluating LLMs as Agents](https://openreview.net/forum?id=zAdUB0aCTQ)
+- [prd-taskmaster Skill (Design Reference)](https://skills.sh/anombyte93/prd-taskmaster/prd-taskmaster) — Key design principles extracted by Kimi K2.5 thinking mode and integrated into baseline Skill design
