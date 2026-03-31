@@ -57,7 +57,13 @@ def _call_moonshot(
     model: str,
     temperature: float
 ) -> AgentExecutionResult:
-    """调用 Kimi API（中国平台）单次调用"""
+    """
+    调用 Kimi API（流式传输版本）
+
+    使用 stream=True 解决超时问题：
+    - 非流式：等待全部内容生成完才返回，生成长 PRD 时容易超时
+    - 流式：边生成边接收，timeout 只需覆盖第一个 token 的等待时间
+    """
     from openai import OpenAI
 
     api_key = os.environ.get("MOONSHOT_API_KEY")
@@ -72,7 +78,7 @@ def _call_moonshot(
         base_url="https://api.moonshot.cn/v1"
     )
 
-    response = client.chat.completions.create(
+    stream = client.chat.completions.create(
         model=model,
         messages=[
             {"role": "system", "content": system_prompt},
@@ -80,30 +86,25 @@ def _call_moonshot(
         ],
         temperature=0.6,
         max_tokens=4096,
-        timeout=60,
+        timeout=60,  # 流式模式下只需等第一个 token，60s 足够
+        stream=True,
         extra_body={"thinking": {"type": "disabled"}}
     )
 
-    content = response.choices[0].message.content or ""
-    tool_calls = []
+    # 逐块收集流式输出
+    content_parts = []
+    for chunk in stream:
+        delta = chunk.choices[0].delta
+        if delta.content:
+            content_parts.append(delta.content)
 
-    if response.choices[0].message.tool_calls:
-        tool_calls = [
-            {
-                "tool_name": tc.function.name,
-                "arguments": tc.function.arguments,
-                "timestamp": time.time()
-            }
-            for tc in response.choices[0].message.tool_calls
-        ]
+    content = "".join(content_parts)
 
     return AgentExecutionResult(
         content=content,
-        tool_calls=tool_calls,
+        tool_calls=[],
         metadata={
-            "prompt_tokens": response.usage.prompt_tokens,
-            "completion_tokens": response.usage.completion_tokens,
-            "model": response.model
+            "model": model
         },
         raw_response=None
     )
@@ -133,7 +134,7 @@ def _call_anthropic(
         temperature=temperature,
         system=system_prompt,
         messages=[{"role": "user", "content": user_prompt}],
-        timeout=60
+        timeout=120
     )
 
     content = response.content[0].text if response.content else ""
@@ -156,15 +157,12 @@ def _call_with_retry(
     max_attempts: int = 3
 ) -> AgentExecutionResult:
     """
-    手动重试机制，替代 tenacity @retry 装饰器
-
-    原因：tenacity 内部使用 RLock，在 Python 3.14 spawn 模式下
-    无法被 pickle 序列化传递给子进程。
+    手动重试机制
 
     重试策略：
-    - 429 过载：等待 30s / 60s / 90s（给服务器充分恢复时间）
-    - 其他错误：等待 1s / 2s（指数退避）
-    - ValueError / EnvironmentError：不重试（配置错误）
+    - 429 过载：等待 30s / 60s / 90s
+    - 其他错误：等待 1s / 2s
+    - ValueError / EnvironmentError：不重试
     """
     last_error = None
     for attempt in range(max_attempts):
@@ -178,10 +176,10 @@ def _call_with_retry(
 
             if attempt < max_attempts - 1:
                 if "429" in error_str or "overloaded" in error_str.lower():
-                    wait = 30 * (attempt + 1)  # 30s, 60s, 90s
+                    wait = 30 * (attempt + 1)
                     print(f"    [429] Engine overloaded, waiting {wait}s before retry {attempt + 2}/{max_attempts}...")
                 else:
-                    wait = 2 ** attempt  # 1s, 2s
+                    wait = 2 ** attempt
                     print(f"    [RETRY] {error_str[:60]}, waiting {wait}s before retry {attempt + 2}/{max_attempts}...")
                 time.sleep(wait)
             else:
