@@ -1,8 +1,10 @@
 # Python 3.10+ required (uses PEP 604 union types: str | None)
 # Python 3.14 recommended (ProcessPoolExecutor spawn context improvements)
 
-# API clients
-openai>=1.40.0,<2.0.0
+# Async HTTP（直连 Kimi API，替代 openai SDK）
+aiohttp>=3.9.0
+
+# Claude Judge
 anthropic>=0.40.0,<1.0.0
 
 # Process safety (CSV concurrent writing)
