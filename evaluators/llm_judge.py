@@ -3,13 +3,7 @@ from __future__ import annotations
 import os
 import json
 import re
-
-from tenacity import (
-    retry,
-    stop_after_attempt,
-    wait_exponential,
-    retry_if_not_exception_type
-)
+import time
 
 from evaluators.assertion_checker import load_assertions
 
@@ -31,7 +25,7 @@ JUDGE_SYSTEM_PROMPT = """你是一个严格的产品文档评估专家。
 
 def _sample_content(content: str, max_chars: int = 3000) -> tuple[str, bool]:
     """
-    对超长内容进行首尾采样，保留 PRD 开头和任务列表结尾
+    对超长内容进行首尾采样
 
     Returns:
         (sampled_content, is_sampled)
@@ -46,11 +40,7 @@ def _sample_content(content: str, max_chars: int = 3000) -> tuple[str, bool]:
 # ── Judge Prompt 构建 ─────────────────────────────────────
 
 def build_judge_prompt(content: str, assertion: dict) -> str:
-    """
-    构建 LLM judge 的评估 prompt
-
-    当内容被截断时，明确告知 LLM 这是部分样本，避免误判"内容缺失"
-    """
+    """构建 LLM judge 的评估 prompt"""
     sample, is_sampled = _sample_content(content)
 
     sampling_note = ""
@@ -78,25 +68,10 @@ def build_judge_prompt(content: str, assertion: dict) -> str:
 注意：如果文档结构混乱或条件只部分满足，请给出 0.4-0.6 之间的 confidence。"""
 
 
-# ── LLM 调用 ─────────────────────────────────────────────
+# ── LLM 单次调用 ──────────────────────────────────────────
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=2, max=10),
-    retry=retry_if_not_exception_type((ValueError, EnvironmentError))
-)
-def _call_judge(prompt: str, provider: str = "moonshot") -> dict:
-    """
-    调用 LLM 进行判断，返回解析后的标准化 dict
-
-    注意：两个 provider 统一使用 temperature=0.6 确保跨平台可比性
-    Moonshot kimi-k2.5 instant mode 强制要求 0.6，Anthropic 同步对齐。
-
-    retry 不重试 ValueError 和 EnvironmentError（配置错误，重试无意义）
-
-    Returns:
-        {"passed": bool, "confidence": float, "reason": str}
-    """
+def _call_judge_once(prompt: str, provider: str = "moonshot") -> dict:
+    """单次 LLM judge 调用，不含重试逻辑"""
     raw = ""
 
     if provider == "moonshot":
@@ -170,6 +145,26 @@ def _call_judge(prompt: str, provider: str = "moonshot") -> dict:
         }
 
 
+def _call_judge(prompt: str, provider: str = "moonshot") -> dict:
+    """
+    调用 LLM judge，含手动重试
+
+    使用手动重试替代 tenacity @retry，避免 RLock 在
+    Python 3.14 spawn 模式下的 pickle 序列化问题。
+    """
+    last_error = None
+    for attempt in range(3):
+        try:
+            return _call_judge_once(prompt, provider)
+        except (ValueError, EnvironmentError):
+            raise
+        except Exception as e:
+            last_error = e
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+    raise last_error
+
+
 # ── 单条 LLM 断言执行 ─────────────────────────────────────
 
 def run_llm_assertion(
@@ -177,14 +172,7 @@ def run_llm_assertion(
     assertion: dict,
     provider: str = "moonshot"
 ) -> dict:
-    """
-    执行单条 llm 类断言，返回部分得分
-
-    部分得分：score = points × confidence（连续值，保留诊断信息）
-
-    Returns:
-        {id, type, method, passed, confidence, score, max_score, reason}
-    """
+    """执行单条 llm 类断言，返回部分得分"""
     required_fields = ["id", "check"]
     for required_field in required_fields:
         if required_field not in assertion:
@@ -208,7 +196,6 @@ def run_llm_assertion(
     passed = judgment["passed"]
     confidence = judgment["confidence"]
     reason = judgment["reason"]
-
     score = round(points * confidence, 2)
 
     return {
@@ -231,21 +218,7 @@ def run_llm_assertions_for_benchmark(
     scenario: str | None = None,
     provider: str = "moonshot"
 ) -> dict:
-    """
-    对一个 benchmark 的所有 llm 类断言批量执行
-
-    Args:
-        content:      Agent 生成的文本内容
-        benchmark_id: b1 / b2 / b3
-        scenario:     B2 必须指定（b2b / consumer / internal）
-        provider:     moonshot 或 anthropic
-
-    Returns:
-        {results: [...], llm_score, llm_max_score}
-
-    Raises:
-        ValueError: B2 未指定 scenario，或 scenario 不在已定义列表中
-    """
+    """对一个 benchmark 的所有 llm 类断言批量执行"""
     assertions_data = load_assertions(benchmark_id)
 
     if benchmark_id == "b2":
