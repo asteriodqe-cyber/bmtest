@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()  # 自动读取项目根目录的 .env 文件
+
 from __future__ import annotations
 
 import os
