@@ -13,7 +13,7 @@ import aiohttp
 from dotenv import load_dotenv
 from tqdm import tqdm
 
-load_dotenv()
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 from evaluators.runner import run_surrogate_agent, build_metadata, compute_sha256
 from evaluators.assertion_checker import run_rule_assertions_for_benchmark
@@ -42,13 +42,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 CHECKPOINT_FILE = "experiments/checkpoint.json"
-TASK_SEMAPHORE_SIZE = 3  # 最大并发数
+TASK_SEMAPHORE_SIZE = 3
 
 
 # ── 断点续传 ──────────────────────────────────────────────
 
 def load_checkpoint() -> dict:
-    """加载断点记录"""
     path = Path(CHECKPOINT_FILE)
     if path.exists():
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -58,7 +57,6 @@ def load_checkpoint() -> dict:
 
 
 def save_checkpoint(checkpoint: dict) -> None:
-    """保存断点记录（精确到单次 run）"""
     Path(CHECKPOINT_FILE).parent.mkdir(exist_ok=True)
     Path(CHECKPOINT_FILE).write_text(
         json.dumps(checkpoint, ensure_ascii=False, indent=2),
@@ -67,7 +65,6 @@ def save_checkpoint(checkpoint: dict) -> None:
 
 
 def clear_checkpoint() -> None:
-    """清除断点（实验完整完成后调用）"""
     path = Path(CHECKPOINT_FILE)
     if path.exists():
         path.unlink()
@@ -82,7 +79,6 @@ def make_run_id(
     condition: str,
     run_idx: int
 ) -> str:
-    """生成唯一的 run ID，用于断点续传"""
     skill_hash = compute_sha256(skill_path)[:8]
     scenario_part = f"_{scenario}" if scenario else ""
     return f"{skill_hash}_{benchmark_id}{scenario_part}_{tc_id}_{condition}_{run_idx}"
@@ -172,14 +168,7 @@ async def evaluate_single_run(
     run_id: str,
     checkpoint: dict
 ) -> dict:
-    """
-    单次评估（async）
-
-    - 检查断点，已完成的直接返回缓存结果
-    - 用 semaphore 控制并发数
-    - 完成后立即写入断点
-    """
-    # 断点检查：已完成的直接返回
+    """单次评估（async），支持断点续传"""
     if run_id in checkpoint["completed_runs"]:
         cached = next(
             (r for r in checkpoint["results"] if r.get("run_id") == run_id),
@@ -224,7 +213,6 @@ async def evaluate_single_run(
             "elapsed": round(elapsed, 2)
         }
 
-        # 立即写入断点（精确到单次 run）
         checkpoint["completed_runs"].append(run_id)
         checkpoint["results"].append(run_result)
         save_checkpoint(checkpoint)
@@ -252,7 +240,7 @@ async def run_benchmark(
 
     provider = "moonshot"
     model = "kimi-k2.5"
-    temperature = 0.6
+    temperature = 1.0
 
     print_header(
         f"PRD Skill Benchmark — {benchmark_id.upper()}\n"
@@ -262,7 +250,6 @@ async def run_benchmark(
         f"  Concurrency: {TASK_SEMAPHORE_SIZE} | Judge: Claude Sonnet"
     )
 
-    # 加载断点
     checkpoint = load_checkpoint()
     resumed = len(checkpoint["completed_runs"])
     if resumed > 0:
@@ -287,7 +274,6 @@ async def run_benchmark(
                 tc_icon = "📌" if tc_type == "edge" else "📝"
                 print(f"\n  {tc_icon} Case {i}/{len(test_cases)}: [{tc['id']}] {tc['label']}")
 
-                # 构建所有 run 的参数
                 skill_run_ids = [
                     make_run_id(skill_path, benchmark_id, scenario, tc["id"], "with_skill", j)
                     for j in range(n_runs)
@@ -297,7 +283,7 @@ async def run_benchmark(
                     for j in range(n_runs)
                 ]
 
-                # 并发执行 with_skill
+                # with_skill 并发执行
                 print(f"    with_skill ({n_runs} runs, max {TASK_SEMAPHORE_SIZE} concurrent)...")
                 skill_tasks = [
                     evaluate_single_run(
@@ -311,12 +297,18 @@ async def run_benchmark(
                 with tqdm(total=n_runs, desc="    with_skill", leave=False,
                          bar_format="{l_bar}{bar:20}{r_bar}") as pbar:
                     for coro in asyncio.as_completed(skill_tasks):
-                        result = await coro
-                        skill_results.append(result)
-                        pbar.set_postfix({"score": f"{result['normalized_score']:.2f}"})
-                        pbar.update(1)
+                        try:
+                            result = await coro
+                            skill_results.append(result)
+                            pbar.set_postfix({"score": f"{result['normalized_score']:.2f}"})
+                        except Exception as e:
+                            skill_results.append({"normalized_score": 0.0})
+                            tqdm.write(f"    [FAILED] {str(e)[:60]}")
+                            logger.error(f"with_skill run failed: {e}")
+                        finally:
+                            pbar.update(1)
 
-                # 并发执行 baseline
+                # baseline 并发执行
                 baseline_tasks = [
                     evaluate_single_run(
                         session, semaphore, skill_path, tc["prompt"],
@@ -329,10 +321,16 @@ async def run_benchmark(
                 with tqdm(total=n_runs, desc="    baseline  ", leave=False,
                          bar_format="{l_bar}{bar:20}{r_bar}") as pbar:
                     for coro in asyncio.as_completed(baseline_tasks):
-                        result = await coro
-                        baseline_results.append(result)
-                        pbar.set_postfix({"score": f"{result['normalized_score']:.2f}"})
-                        pbar.update(1)
+                        try:
+                            result = await coro
+                            baseline_results.append(result)
+                            pbar.set_postfix({"score": f"{result['normalized_score']:.2f}"})
+                        except Exception as e:
+                            baseline_results.append({"normalized_score": 0.0})
+                            tqdm.write(f"    [FAILED] {str(e)[:60]}")
+                            logger.error(f"baseline run failed: {e}")
+                        finally:
+                            pbar.update(1)
 
                 skill_scores = [r["normalized_score"] for r in skill_results]
                 baseline_scores = [r["normalized_score"] for r in baseline_results]
@@ -431,7 +429,6 @@ async def run_benchmark(
     elapsed = time.time() - start_time
     print_overall_summary(benchmark_id, overall_gain, len(test_cases), elapsed)
 
-    # 实验完整完成，清除断点
     clear_checkpoint()
     logger.info(f"Benchmark {benchmark_id} completed in {elapsed:.1f}s")
 
