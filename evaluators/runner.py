@@ -105,7 +105,7 @@ def _call_moonshot(
             "completion_tokens": response.usage.completion_tokens,
             "model": response.model
         },
-        raw_response=None  # 不传递 raw_response，避免 pickle 问题
+        raw_response=None
     )
 
 
@@ -146,7 +146,7 @@ def _call_anthropic(
             "output_tokens": response.usage.output_tokens,
             "model": response.model
         },
-        raw_response=None  # 不传递 raw_response，避免 pickle 问题
+        raw_response=None
     )
 
 
@@ -159,11 +159,12 @@ def _call_with_retry(
     手动重试机制，替代 tenacity @retry 装饰器
 
     原因：tenacity 内部使用 RLock，在 Python 3.14 spawn 模式下
-    无法被 pickle 序列化传递给子进程，导致 ProcessPoolExecutor 报错。
-    改用手动重试完全避开这个问题。
+    无法被 pickle 序列化传递给子进程。
 
-    不重试：ValueError、EnvironmentError（配置错误，重试无意义）
-    重试：其他异常（网络错误、API 超时等）
+    重试策略：
+    - 429 过载：等待 30s / 60s / 90s（给服务器充分恢复时间）
+    - 其他错误：等待 1s / 2s（指数退避）
+    - ValueError / EnvironmentError：不重试（配置错误）
     """
     last_error = None
     for attempt in range(max_attempts):
@@ -173,9 +174,19 @@ def _call_with_retry(
             raise
         except Exception as e:
             last_error = e
+            error_str = str(e)
+
             if attempt < max_attempts - 1:
-                wait = 2 ** attempt
+                if "429" in error_str or "overloaded" in error_str.lower():
+                    wait = 30 * (attempt + 1)  # 30s, 60s, 90s
+                    print(f"    [429] Engine overloaded, waiting {wait}s before retry {attempt + 2}/{max_attempts}...")
+                else:
+                    wait = 2 ** attempt  # 1s, 2s
+                    print(f"    [RETRY] {error_str[:60]}, waiting {wait}s before retry {attempt + 2}/{max_attempts}...")
                 time.sleep(wait)
+            else:
+                print(f"    [FAILED] All {max_attempts} attempts failed: {error_str[:80]}")
+
     raise last_error
 
 
