@@ -1,14 +1,23 @@
-
 from __future__ import annotations
 
-import os
+import asyncio
 import hashlib
+import json
+import os
 import time
 from dataclasses import dataclass, field
-from typing import Any
 from pathlib import Path
+from typing import Any
+
 from dotenv import load_dotenv
-load_dotenv()  # 自动读取项目根目录的 .env 文件
+load_dotenv()
+
+MOONSHOT_BASE_URL = "https://api.moonshot.cn/v1/chat/completions"
+MOONSHOT_MODEL = "kimi-k2.5"
+MOONSHOT_TEMPERATURE = 0.6
+CONNECT_TIMEOUT = 5
+READ_TIMEOUT = 90
+
 
 @dataclass
 class AgentExecutionResult:
@@ -17,7 +26,6 @@ class AgentExecutionResult:
     tool_calls: list[dict] = field(default_factory=list)
     execution_trace: list[str] = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
-    raw_response: Any = None
 
 
 def load_skill(skill_path: str) -> str:
@@ -46,131 +54,109 @@ def build_metadata(
         "surrogate_agent": model,
         "api_provider": provider,
         "temperature": temperature,
-        "thinking_mode": "instant" if provider == "moonshot" else "default",
+        "thinking_mode": "instant",
         "timestamp": time.strftime("%Y-%m-%d"),
         "n_runs": n_runs,
         "skill_hash": compute_sha256(skill_path)
     }
 
 
-def _call_moonshot(
+async def _call_kimi_stream(
+    session,
     system_prompt: str,
     user_prompt: str,
-    model: str,
-    temperature: float
-) -> AgentExecutionResult:
+    attempt: int = 0
+) -> str:
     """
-    调用 Kimi API（流式传输版本）
+    单次 Kimi API 流式调用
 
-    使用 stream=True 解决超时问题：
-    - 非流式：等待全部内容生成完才返回，生成长 PRD 时容易超时
-    - 流式：边生成边接收，timeout 只需覆盖第一个 token 的等待时间
+    使用流式传输解决超时问题：
+    - 非流式：等待全部生成完才返回，长 PRD 容易超时
+    - 流式：边生成边接收，timeout 只需覆盖第一个 token
     """
-    from openai import OpenAI
+    import aiohttp
 
     api_key = os.environ.get("MOONSHOT_API_KEY")
     if not api_key:
         raise EnvironmentError(
             "MOONSHOT_API_KEY not set. "
-            "Get your key from https://platform.moonshot.cn"
+            "Please add it to your .env file."
         )
 
-    client = OpenAI(
-        api_key=api_key,
-        base_url="https://api.moonshot.cn/v1"
-    )
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
 
-    stream = client.chat.completions.create(
-        model=model,
-        messages=[
+    payload = {
+        "model": MOONSHOT_MODEL,
+        "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ],
-        temperature=0.6,
-        max_tokens=4096,
-        timeout=60,  # 流式模式下只需等第一个 token，60s 足够
-        stream=True,
-        extra_body={"thinking": {"type": "disabled"}}
+        "temperature": MOONSHOT_TEMPERATURE,
+        "max_tokens": 4096,
+        "stream": True
+    }
+
+    timeout = aiohttp.ClientTimeout(
+        connect=CONNECT_TIMEOUT,
+        sock_read=READ_TIMEOUT
     )
 
-    # 逐块收集流式输出
     content_parts = []
-    for chunk in stream:
-        delta = chunk.choices[0].delta
-        if delta.content:
-            content_parts.append(delta.content)
 
-    content = "".join(content_parts)
+    async with session.post(
+        MOONSHOT_BASE_URL,
+        headers=headers,
+        json=payload,
+        timeout=timeout
+    ) as resp:
+        if resp.status == 429:
+            raise Exception(f"429: Engine overloaded")
+        if resp.status != 200:
+            text = await resp.text()
+            raise Exception(f"HTTP {resp.status}: {text[:200]}")
 
-    return AgentExecutionResult(
-        content=content,
-        tool_calls=[],
-        metadata={
-            "model": model
-        },
-        raw_response=None
-    )
+        async for line in resp.content:
+            line = line.decode("utf-8").strip()
+            if not line or not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if data == "[DONE]":
+                break
+            try:
+                chunk = json.loads(data)
+                delta = chunk["choices"][0]["delta"]
+                if delta.get("content"):
+                    content_parts.append(delta["content"])
+            except (json.JSONDecodeError, KeyError):
+                continue
+
+    return "".join(content_parts)
 
 
-def _call_anthropic(
+async def _call_kimi_with_retry(
+    session,
     system_prompt: str,
     user_prompt: str,
-    model: str,
-    temperature: float
-) -> AgentExecutionResult:
-    """调用 Claude API 单次调用"""
-    import anthropic
-
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise EnvironmentError(
-            "ANTHROPIC_API_KEY not set. "
-            "Get your key from https://console.anthropic.com"
-        )
-
-    client = anthropic.Anthropic(api_key=api_key)
-
-    response = client.messages.create(
-        model=model,
-        max_tokens=4096,
-        temperature=temperature,
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_prompt}],
-        timeout=120
-    )
-
-    content = response.content[0].text if response.content else ""
-
-    return AgentExecutionResult(
-        content=content,
-        tool_calls=[],
-        metadata={
-            "input_tokens": response.usage.input_tokens,
-            "output_tokens": response.usage.output_tokens,
-            "model": response.model
-        },
-        raw_response=None
-    )
-
-
-def _call_with_retry(
-    call_fn,
-    *args,
     max_attempts: int = 3
-) -> AgentExecutionResult:
+) -> str:
     """
-    手动重试机制
+    带重试的 Kimi 调用
 
     重试策略：
-    - 429 过载：等待 30s / 60s / 90s
-    - 其他错误：等待 1s / 2s
-    - ValueError / EnvironmentError：不重试
+    - 429 过载：等待 30s / 60s / 90s + 随机抖动
+    - 其他错误：等待 2s / 4s
+    - EnvironmentError：不重试
     """
+    import random
+
     last_error = None
     for attempt in range(max_attempts):
         try:
-            return call_fn(*args)
-        except (ValueError, EnvironmentError):
+            return await _call_kimi_stream(session, system_prompt, user_prompt, attempt)
+        except EnvironmentError:
             raise
         except Exception as e:
             last_error = e
@@ -178,35 +164,28 @@ def _call_with_retry(
 
             if attempt < max_attempts - 1:
                 if "429" in error_str or "overloaded" in error_str.lower():
-                    wait = 30 * (attempt + 1)
-                    print(f"    [429] Engine overloaded, waiting {wait}s before retry {attempt + 2}/{max_attempts}...")
+                    wait = 30 * (attempt + 1) + random.uniform(0, 10)
                 else:
-                    wait = 2 ** attempt
-                    print(f"    [RETRY] {error_str[:60]}, waiting {wait}s before retry {attempt + 2}/{max_attempts}...")
-                time.sleep(wait)
-            else:
-                print(f"    [FAILED] All {max_attempts} attempts failed: {error_str[:80]}")
+                    wait = 2 ** (attempt + 1)
+                print(f"    [RETRY {attempt + 2}/{max_attempts}] {error_str[:60]}, waiting {wait:.1f}s...")
+                await asyncio.sleep(wait)
 
     raise last_error
 
 
-def run_surrogate_agent(
+async def run_surrogate_agent(
+    session,
     skill_path: str,
     user_input: str,
-    provider: str = "moonshot",
-    model: str = "kimi-k2.5",
-    temperature: float = 0.6,
     use_skill: bool = True
 ) -> AgentExecutionResult:
     """
-    统一的 Agent 执行接口
+    统一的 Agent 执行接口（async）
 
     Args:
+        session:     aiohttp.ClientSession 实例
         skill_path:  SKILL.md 文件路径
         user_input:  用户任务描述
-        provider:    API 提供方，moonshot 或 anthropic
-        model:       模型名称，默认 kimi-k2.5
-        temperature: 采样温度（moonshot 固定使用 0.6）
         use_skill:   True = with_skill 条件，False = baseline 条件
     """
     if use_skill:
@@ -214,12 +193,9 @@ def run_surrogate_agent(
     else:
         system_prompt = "你是一个产品经理助手，帮助用户撰写产品文档。"
 
-    if provider == "moonshot":
-        temperature = 0.6
-        return _call_with_retry(_call_moonshot, system_prompt, user_input, model, temperature)
-    elif provider == "anthropic":
-        return _call_with_retry(_call_anthropic, system_prompt, user_input, model, temperature)
-    else:
-        raise ValueError(
-            f"Unsupported provider: {provider}. Use 'moonshot' or 'anthropic'."
-        )
+    content = await _call_kimi_with_retry(session, system_prompt, user_input)
+
+    return AgentExecutionResult(
+        content=content,
+        metadata={"model": MOONSHOT_MODEL}
+    )
