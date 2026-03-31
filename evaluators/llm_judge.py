@@ -1,35 +1,28 @@
 from __future__ import annotations
 
-import os
 import json
+import os
 import re
-import time
+
+from dotenv import load_dotenv
+load_dotenv()
 
 from evaluators.assertion_checker import load_assertions
 
-
 JUDGE_SYSTEM_PROMPT = """你是一个严格的产品文档评估专家。
-你的任务是判断给定的文档内容是否满足特定的断言条件。
+你的任务是批量判断给定的文档内容是否满足多个断言条件。
 
 规则：
-1. 只返回 JSON 格式，不要有任何其他文字
-2. 如果满足断言，confidence 在 0.7-1.0 之间
-3. 如果不满足，confidence 在 0.0-0.3 之间
-4. 部分满足时，confidence 在 0.4-0.6 之间
-5. 判断要基于文档实际内容，不要推测未写出的内容
-6. 如果文档内容标注为部分样本，请基于可见内容进行判断，不要因内容不完整而降低 confidence
+1. 只返回 JSON 数组格式，不要有任何其他文字
+2. 数组中每个元素对应一个断言的判断结果
+3. confidence 范围：满足 0.7-1.0，不满足 0.0-0.3，部分满足 0.4-0.6
+4. 判断要基于文档实际内容，不要推测未写出的内容
+5. 如果文档内容标注为部分样本，请基于可见内容判断，不要因内容不完整而降低 confidence
 """
 
 
-# ── 内容采样 ──────────────────────────────────────────────
-
 def _sample_content(content: str, max_chars: int = 3000) -> tuple[str, bool]:
-    """
-    对超长内容进行首尾采样
-
-    Returns:
-        (sampled_content, is_sampled)
-    """
+    """对超长内容进行首尾采样"""
     if len(content) <= max_chars:
         return content, False
     head = content[:1200]
@@ -37,188 +30,106 @@ def _sample_content(content: str, max_chars: int = 3000) -> tuple[str, bool]:
     return f"{head}\n...[中间省略]...\n{tail}", True
 
 
-# ── Judge Prompt 构建 ─────────────────────────────────────
-
-def build_judge_prompt(content: str, assertion: dict) -> str:
-    """构建 LLM judge 的评估 prompt"""
+def _build_batch_judge_prompt(content: str, assertions: list[dict]) -> str:
+    """构建批量评估 prompt，一次调用评估所有 llm 断言"""
     sample, is_sampled = _sample_content(content)
 
     sampling_note = ""
     if is_sampled:
         sampling_note = (
-            "\n【注意】文档较长，以下仅显示首尾部分用于评估。"
-            "请基于可见内容进行判断，不要因内容不完整而降低 confidence。\n"
+            "\n【注意】文档较长，以下仅显示首尾部分。"
+            "请基于可见内容判断，不要因内容不完整而降低 confidence。\n"
         )
 
-    return f"""请判断以下文档是否满足断言条件。
+    assertions_text = "\n".join([
+        f"{i+1}. [ID:{a['id']}] {a['check']}"
+        for i, a in enumerate(assertions)
+    ])
 
-【断言条件】
-{assertion['check']}
+    return f"""请批量判断以下文档是否满足各个断言条件。
+
+【断言列表】
+{assertions_text}
 {sampling_note}
 【文档内容】
 {sample}
 
-请返回以下 JSON 格式，不要包含任何其他文字：
-{{
-    "passed": true或false,
-    "confidence": 0到1之间的浮点数,
-    "reason": "简短的判断理由（20字以内）"
-}}
+请返回 JSON 数组，数组长度必须与断言数量相同，顺序一一对应：
+[
+  {{"id": "断言ID", "passed": true或false, "confidence": 0到1的浮点数, "reason": "理由(10字以内)"}},
+  ...
+]
 
-注意：如果文档结构混乱或条件只部分满足，请给出 0.4-0.6 之间的 confidence。"""
+只返回 JSON 数组，不要有任何其他文字。"""
 
 
-# ── LLM 单次调用 ──────────────────────────────────────────
-
-def _call_judge_once(prompt: str, provider: str = "moonshot") -> dict:
-    """单次 LLM judge 调用，不含重试逻辑"""
-    raw = ""
-
-    if provider == "moonshot":
-        from openai import OpenAI
-
-        api_key = os.environ.get("MOONSHOT_API_KEY")
-        if not api_key:
-            raise EnvironmentError(
-                "MOONSHOT_API_KEY not set. "
-                "Get your key from https://platform.moonshot.cn"
-            )
-
-        client = OpenAI(
-            api_key=api_key,
-            base_url="https://api.moonshot.cn/v1"
-        )
-        response = client.chat.completions.create(
-            model="kimi-k2.5",
-            messages=[
-                {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.6,
-            max_tokens=256,
-            timeout=60,
-            extra_body={"thinking": {"type": "disabled"}}
-        )
-        raw = response.choices[0].message.content or "{}"
-
-    elif provider == "anthropic":
-        import anthropic
-
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if not api_key:
-            raise EnvironmentError(
-                "ANTHROPIC_API_KEY not set. "
-                "Get your key from https://console.anthropic.com"
-            )
-
-        client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=256,
-            temperature=0.6,
-            system=JUDGE_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": prompt}],
-            timeout=60
-        )
-        raw = response.content[0].text if response.content else "{}"
-
-    else:
-        raise ValueError(f"Unsupported provider: {provider}")
-
+def _parse_batch_judge_response(raw: str, assertions: list[dict]) -> list[dict]:
+    """解析批量评估响应，处理各种格式异常"""
     raw = raw.strip()
-    json_match = re.search(r'\{.*\}', raw, re.DOTALL)
+
+    # 提取 JSON 数组
+    json_match = re.search(r'\[.*\]', raw, re.DOTALL)
     if json_match:
         raw = json_match.group(0)
 
     try:
-        result = json.loads(raw)
-        return {
-            "passed": bool(result.get("passed", False)),
-            "confidence": float(result.get("confidence", 0.0)),
-            "reason": str(result.get("reason", ""))[:100]
-        }
-    except (json.JSONDecodeError, ValueError) as e:
-        return {
-            "passed": False,
-            "confidence": 0.0,
-            "reason": f"Parse error: {str(e)[:50]}"
-        }
+        results = json.loads(raw)
+        if not isinstance(results, list):
+            raise ValueError("Response is not a list")
 
+        # 验证并标准化每个结果
+        parsed = []
+        for i, item in enumerate(results):
+            if i >= len(assertions):
+                break
+            parsed.append({
+                "id": item.get("id", assertions[i]["id"]),
+                "passed": bool(item.get("passed", False)),
+                "confidence": float(item.get("confidence", 0.0)),
+                "reason": str(item.get("reason", ""))[:100]
+            })
 
-def _call_judge(prompt: str, provider: str = "moonshot") -> dict:
-    """
-    调用 LLM judge，含手动重试
-
-    使用手动重试替代 tenacity @retry，避免 RLock 在
-    Python 3.14 spawn 模式下的 pickle 序列化问题。
-    """
-    last_error = None
-    for attempt in range(3):
-        try:
-            return _call_judge_once(prompt, provider)
-        except (ValueError, EnvironmentError):
-            raise
-        except Exception as e:
-            last_error = e
-            if attempt < 2:
-                time.sleep(2 ** attempt)
-    raise last_error
-
-
-# ── 单条 LLM 断言执行 ─────────────────────────────────────
-
-def run_llm_assertion(
-    content: str,
-    assertion: dict,
-    provider: str = "moonshot"
-) -> dict:
-    """执行单条 llm 类断言，返回部分得分"""
-    required_fields = ["id", "check"]
-    for required_field in required_fields:
-        if required_field not in assertion:
-            return {
-                "id": assertion.get("id", "unknown"),
-                "type": "error",
-                "method": "llm",
+        # 如果返回数量不足，补充失败结果
+        while len(parsed) < len(assertions):
+            i = len(parsed)
+            parsed.append({
+                "id": assertions[i]["id"],
                 "passed": False,
                 "confidence": 0.0,
-                "score": 0,
-                "max_score": assertion.get("points", 2),
-                "reason": f"Missing required field: {required_field}"
+                "reason": "Parse error: missing result"
+            })
+
+        return parsed
+
+    except (json.JSONDecodeError, ValueError):
+        # 解析完全失败，返回全部失败
+        return [
+            {
+                "id": a["id"],
+                "passed": False,
+                "confidence": 0.0,
+                "reason": "Parse error"
             }
-
-    assertion_id = assertion["id"]
-    points = assertion.get("points", 2)
-
-    prompt = build_judge_prompt(content, assertion)
-    judgment = _call_judge(prompt, provider)
-
-    passed = judgment["passed"]
-    confidence = judgment["confidence"]
-    reason = judgment["reason"]
-    score = round(points * confidence, 2)
-
-    return {
-        "id": assertion_id,
-        "type": assertion.get("type", "completeness"),
-        "method": "llm",
-        "passed": passed,
-        "confidence": confidence,
-        "score": score,
-        "max_score": points,
-        "reason": reason
-    }
+            for a in assertions
+        ]
 
 
-# ── 批量 LLM 断言执行 ─────────────────────────────────────
-
-def run_llm_assertions_for_benchmark(
+async def run_llm_assertions_for_benchmark(
     content: str,
     benchmark_id: str,
-    scenario: str | None = None,
-    provider: str = "moonshot"
+    scenario: str | None = None
 ) -> dict:
-    """对一个 benchmark 的所有 llm 类断言批量执行"""
+    """
+    批量执行所有 llm 类断言（一次 Claude API 调用）
+
+    使用 Claude 作为 judge 评估 Kimi 生成的 PRD，
+    避免用同一个模型自我评估的偏差。
+
+    Returns:
+        {results: [...], llm_score, llm_max_score}
+    """
+    import anthropic
+
     assertions_data = load_assertions(benchmark_id)
 
     if benchmark_id == "b2":
@@ -234,15 +145,83 @@ def run_llm_assertions_for_benchmark(
                 f"Valid: {valid_scenarios}"
             )
         assertions = assertions_data["scenarios"][scenario]["assertions"]
-
     elif benchmark_id in ("b1", "b3"):
         assertions = assertions_data["assertions"]
-
     else:
         assertions = assertions_data.get("assertions", [])
 
     llm_assertions = [a for a in assertions if a.get("method") == "llm"]
-    results = [run_llm_assertion(content, a, provider) for a in llm_assertions]
+
+    if not llm_assertions:
+        return {"results": [], "llm_score": 0.0, "llm_max_score": 0}
+
+    # 防御性检查
+    valid_assertions = []
+    for a in llm_assertions:
+        if "id" not in a or "check" not in a:
+            continue
+        valid_assertions.append(a)
+
+    if not valid_assertions:
+        return {"results": [], "llm_score": 0.0, "llm_max_score": 0}
+
+    # 构建批量 prompt
+    prompt = _build_batch_judge_prompt(content, valid_assertions)
+
+    # 调用 Claude 作为 judge
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise EnvironmentError(
+            "ANTHROPIC_API_KEY not set. "
+            "Please add it to your .env file."
+        )
+
+    client = anthropic.Anthropic(api_key=api_key)
+
+    # 最多重试 3 次
+    last_error = None
+    raw = ""
+    for attempt in range(3):
+        try:
+            response = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=1024,
+                temperature=0.1,  # judge 用低温度，结果更稳定
+                system=JUDGE_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": prompt}],
+                timeout=60
+            )
+            raw = response.content[0].text if response.content else "[]"
+            break
+        except Exception as e:
+            last_error = e
+            if attempt < 2:
+                import asyncio
+                await asyncio.sleep(2 ** attempt)
+
+    if not raw and last_error:
+        raise last_error
+
+    # 解析结果
+    judgments = _parse_batch_judge_response(raw, valid_assertions)
+
+    # 计算得分
+    results = []
+    for judgment, assertion in zip(judgments, valid_assertions):
+        points = assertion.get("points", 2)
+        confidence = judgment["confidence"]
+        score = round(points * confidence, 2)
+
+        results.append({
+            "id": judgment["id"],
+            "type": assertion.get("type", "completeness"),
+            "method": "llm",
+            "passed": judgment["passed"],
+            "confidence": confidence,
+            "score": score,
+            "max_score": points,
+            "reason": judgment["reason"]
+        })
 
     llm_score = sum(r["score"] for r in results)
     llm_max = sum(r["max_score"] for r in results)
