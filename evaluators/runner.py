@@ -1,5 +1,3 @@
-from dotenv import load_dotenv
-load_dotenv()  # 自动读取项目根目录的 .env 文件
 
 from __future__ import annotations
 
@@ -9,7 +7,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 from pathlib import Path
-
+from dotenv import load_dotenv
+load_dotenv()  # 自动读取项目根目录的 .env 文件
 
 @dataclass
 class AgentExecutionResult:
