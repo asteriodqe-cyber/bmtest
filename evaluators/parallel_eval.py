@@ -18,7 +18,8 @@ from evaluators.gain_calculator import (
     calculate_skill_gain,
     calculate_cohens_kappa,
     save_to_csv,
-    CSV_FIELDNAMES
+    CSV_FIELDNAMES,
+    _get_absolute_tier
 )
 
 # 单个任务的最长允许时间（秒）
@@ -126,6 +127,7 @@ def run_benchmark(
     - baseline 和 with_skill 结果都写入 CSV
     - try/finally 确保崩溃或中断时已完成的结果不丢失
     - csv_rows 的键通过运行时断言严格对齐 CSV_FIELDNAMES（单一来源）
+    - calculate_skill_gain 传入 benchmark_id 用于查询 QUALITY_FLOOR
     """
     test_cases_path = Path(f"benchmark/test_cases/{benchmark_id}_inputs.json")
     test_cases_data = json.loads(test_cases_path.read_text(encoding="utf-8"))
@@ -141,6 +143,10 @@ def run_benchmark(
     print(f"{'='*50}")
 
     mp_context = multiprocessing.get_context("spawn")
+
+    # moonshot 固定 temperature=0.6
+    if provider == "moonshot":
+        temperature = 0.6
 
     api_keys = {
         "moonshot": os.getenv("MOONSHOT_API_KEY", ""),
@@ -186,17 +192,21 @@ def run_benchmark(
 
             skill_metrics = calculate_metrics(skill_scores)
             baseline_metrics = calculate_metrics(baseline_scores)
-            gain_result = calculate_skill_gain(skill_scores, baseline_scores)
+            gain_result = calculate_skill_gain(
+                skill_scores, baseline_scores, benchmark_id
+            )
             skill_kappa = calculate_cohens_kappa(skill_scores)
             baseline_kappa = calculate_cohens_kappa(baseline_scores)
 
             print(f"  with_skill → pass_rate: {skill_metrics['pass_rate']:.3f} | "
                   f"consistency: {skill_metrics['consistency']:.3f} | "
-                  f"kappa: {skill_kappa:.3f}")
+                  f"kappa: {skill_kappa:.3f} | "
+                  f"tier: {gain_result['absolute_tier']}")
             print(f"  baseline   → pass_rate: {baseline_metrics['pass_rate']:.3f} | "
                   f"consistency: {baseline_metrics['consistency']:.3f} | "
                   f"kappa: {baseline_kappa:.3f}")
             print(f"  Skill Gain → {gain_result['gain']:.3f} ({gain_result['efficacy']})")
+            print(f"  Diagnosis  → {gain_result['diagnosis']}")
 
             skill_all_scores.extend(skill_scores)
             baseline_all_scores.extend(baseline_scores)
@@ -219,7 +229,11 @@ def run_benchmark(
                 "final_score": skill_metrics["final_score"],
                 "kappa": skill_kappa,
                 "gain": gain_result["gain"],
-                "efficacy": gain_result["efficacy"]
+                "efficacy": gain_result["efficacy"],
+                "absolute_tier": gain_result["absolute_tier"],
+                "meets_quality_floor": gain_result["meets_quality_floor"],
+                "quality_floor": gain_result["quality_floor"],
+                "diagnosis": gain_result["diagnosis"]
             }
 
             baseline_row = {
@@ -238,7 +252,11 @@ def run_benchmark(
                 "final_score": baseline_metrics["final_score"],
                 "kappa": baseline_kappa,
                 "gain": 0.0,
-                "efficacy": "N/A"
+                "efficacy": "N/A",
+                "absolute_tier": _get_absolute_tier(baseline_metrics["pass_rate"]),
+                "meets_quality_floor": "",
+                "quality_floor": gain_result["quality_floor"],
+                "diagnosis": "N/A"
             }
 
             # 运行时验证字段对齐，防止 CSV_FIELDNAMES 与 row 键集合漂移
@@ -266,13 +284,18 @@ def run_benchmark(
         print("No results to summarize.")
         return {}
 
-    overall_gain = calculate_skill_gain(skill_all_scores, baseline_all_scores)
+    overall_gain = calculate_skill_gain(
+        skill_all_scores, baseline_all_scores, benchmark_id
+    )
 
     print(f"\n{'='*50}")
     print(f"OVERALL {benchmark_id.upper()} RESULT")
     print(f"  Skill Gain     : {overall_gain['gain']:.3f} ({overall_gain['efficacy']})")
+    print(f"  Absolute Tier  : {overall_gain['absolute_tier']}")
+    print(f"  Meets Floor    : {overall_gain['meets_quality_floor']}")
     print(f"  Skill pass_rate: {overall_gain['skill_pass_rate']:.3f}")
     print(f"  Base  pass_rate: {overall_gain['baseline_pass_rate']:.3f}")
+    print(f"  Diagnosis      : {overall_gain['diagnosis']}")
     print(f"{'='*50}\n")
 
     return overall_gain
