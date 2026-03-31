@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import multiprocessing
 import os
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed, TimeoutError
 from pathlib import Path
 
 from tqdm import tqdm
@@ -34,23 +32,13 @@ def print_header(title: str) -> None:
     print(f"{'='*width}")
 
 
-def print_section(title: str) -> None:
-    print(f"\n{'─'*60}")
-    print(f"  {title}")
-    print(f"{'─'*60}")
-
-
-def print_metric_row(label: str, value, width: int = 30) -> None:
-    print(f"  {label:<{width}} {value}")
-
-
 def print_tier_bar(score: float) -> str:
     """可视化质量层级"""
     tier = _get_absolute_tier(score)
     bars = int(score * 20)
     bar = "█" * bars + "░" * (20 - bars)
-    tier_colors = {"A": "★★★★", "B": "★★★☆", "C": "★★☆☆", "D": "★☆☆☆"}
-    return f"[{bar}] {score:.3f} {tier_colors.get(tier, '')} Tier-{tier}"
+    tier_icons = {"A": "★★★★", "B": "★★★☆", "C": "★★☆☆", "D": "★☆☆☆"}
+    return f"[{bar}] {score:.3f} {tier_icons.get(tier, '')} Tier-{tier}"
 
 
 def print_test_case_result(
@@ -64,23 +52,17 @@ def print_test_case_result(
     baseline_kappa: float
 ) -> None:
     """打印单个测试用例的详细结果"""
-    print(f"\n  📋 [{tc_id}] {tc_label} ({tc_type})")
-    print(f"  {'─'*55}")
-
-    # with_skill 结果
-    print(f"  {'with_skill':}")
+    print(f"\n  {'─'*55}")
+    print(f"  with_skill")
     print(f"    pass_rate  : {print_tier_bar(skill_metrics['pass_rate'])}")
     print(f"    consistency: {skill_metrics['consistency']:.3f}")
     print(f"    kappa      : {skill_kappa:.3f}")
     print(f"    final_score: {skill_metrics['final_score']:.3f}")
-
-    # baseline 结果
-    print(f"  {'baseline':}")
+    print(f"  baseline")
     print(f"    pass_rate  : {print_tier_bar(baseline_metrics['pass_rate'])}")
     print(f"    consistency: {baseline_metrics['consistency']:.3f}")
     print(f"    kappa      : {baseline_kappa:.3f}")
 
-    # Gain
     gain = gain_result['gain']
     efficacy = gain_result['efficacy']
     efficacy_icon = {"high": "🟢", "medium": "🟡", "low": "🔴"}.get(efficacy, "⚪")
@@ -103,25 +85,28 @@ def print_overall_summary(
     efficacy = overall_gain['efficacy']
     efficacy_icon = {"high": "🟢", "medium": "🟡", "low": "🔴"}.get(efficacy, "⚪")
 
-    print_metric_row("Skill pass_rate :", print_tier_bar(overall_gain['skill_pass_rate']))
-    print_metric_row("Base  pass_rate :", print_tier_bar(overall_gain['baseline_pass_rate']))
+    print(f"  {'Skill pass_rate :':<20} {print_tier_bar(overall_gain['skill_pass_rate'])}")
+    print(f"  {'Base  pass_rate :':<20} {print_tier_bar(overall_gain['baseline_pass_rate'])}")
     print(f"  {'─'*55}")
-    print_metric_row("Skill Gain      :", f"{gain:+.3f} {efficacy_icon} {efficacy.upper()}")
-    print_metric_row("Absolute Tier   :", overall_gain['absolute_tier'])
-    print_metric_row("Meets Floor     :", "✅ YES" if overall_gain['meets_quality_floor'] else "❌ NO")
-    print_metric_row("Diagnosis       :", overall_gain['diagnosis'])
+    print(f"  {'Skill Gain      :':<20} {gain:+.3f} {efficacy_icon} {efficacy.upper()}")
+    print(f"  {'Absolute Tier   :':<20} {overall_gain['absolute_tier']}")
+    print(f"  {'Meets Floor     :':<20} {'✅ YES' if overall_gain['meets_quality_floor'] else '❌ NO'}")
+    print(f"  {'Diagnosis       :':<20} {overall_gain['diagnosis']}")
     print(f"  {'─'*55}")
-    print_metric_row("Test cases      :", total_cases)
-    print_metric_row("Elapsed time    :", f"{elapsed:.1f}s ({elapsed/60:.1f}min)")
+    print(f"  {'Test cases      :':<20} {total_cases}")
+    print(f"  {'Elapsed time    :':<20} {elapsed:.1f}s ({elapsed/60:.1f}min)")
     print(f"{'='*60}\n")
 
 
-# ── 子进程评估 ────────────────────────────────────────────
+# ── 单次评估（主进程直接调用，无 pickle 问题）────────────
 
 def evaluate_single_run(args: tuple) -> dict:
     """
-    单次评估（在独立进程中运行）
-    使用手动重试替代 tenacity，避免 RLock 在 spawn 模式下的 pickle 问题
+    单次评估，在主进程中串行执行
+
+    改为串行的原因：
+    Windows spawn 模式下 ProcessPoolExecutor 子进程启动开销过大，
+    导致进程被强制终止。API 等待是主要瓶颈，串行执行总时间差异不大。
     """
     (
         skill_path, user_input, provider, model,
@@ -163,58 +148,54 @@ def evaluate_single_run(args: tuple) -> dict:
     }
 
 
-# ── 并行执行 ──────────────────────────────────────────────
+# ── 串行执行（替代原来的并行）────────────────────────────
 
-def run_parallel(
+def run_sequential(
     args_list: list[tuple],
-    n_workers: int,
-    mp_context,
     desc: str = "Evaluating"
 ) -> list[float]:
-    """并行执行一批任务，返回 normalized_score 列表"""
+    """
+    串行执行评估任务，返回 normalized_score 列表
+
+    使用串行替代 ProcessPoolExecutor 的原因：
+    - Windows spawn 模式下多进程并发导致子进程被强制终止
+    - API 等待是主要瓶颈，串行执行总时间差异不大
+    - 串行执行完全避免 pickle 序列化问题
+    """
     scores = []
-    actual_workers = min(n_workers, 4)
     success_count = 0
     fail_count = 0
-    timeout_count = 0
 
-    with ProcessPoolExecutor(
-        max_workers=actual_workers,
-        mp_context=mp_context
-    ) as executor:
-        futures = [executor.submit(evaluate_single_run, arg) for arg in args_list]
-
-        with tqdm(
-            total=len(futures),
-            desc=f"    {desc}",
-            leave=False,
-            bar_format="{l_bar}{bar:25}{r_bar}"
-        ) as pbar:
-            for future in as_completed(futures):
-                try:
-                    result = future.result(timeout=TASK_TIMEOUT)
-                    scores.append(result["normalized_score"])
-                    success_count += 1
-                    pbar.set_postfix({
-                        "ok": success_count,
-                        "fail": fail_count,
-                        "last": f"{result['normalized_score']:.2f}"
-                    })
-                except TimeoutError:
-                    timeout_count += 1
-                    fail_count += 1
-                    scores.append(0.0)
-                    pbar.set_postfix({"ok": success_count, "fail": fail_count, "last": "TIMEOUT"})
-                except Exception as e:
-                    fail_count += 1
-                    scores.append(0.0)
-                    pbar.set_postfix({"ok": success_count, "fail": fail_count, "last": "ERROR"})
-                    tqdm.write(f"    [ERROR] {str(e)[:80]}")
-                finally:
-                    pbar.update(1)
+    with tqdm(
+        total=len(args_list),
+        desc=f"    {desc}",
+        leave=False,
+        bar_format="{l_bar}{bar:25}{r_bar}"
+    ) as pbar:
+        for arg in args_list:
+            try:
+                result = evaluate_single_run(arg)
+                scores.append(result["normalized_score"])
+                success_count += 1
+                pbar.set_postfix({
+                    "ok": success_count,
+                    "fail": fail_count,
+                    "last": f"{result['normalized_score']:.2f}"
+                })
+            except Exception as e:
+                fail_count += 1
+                scores.append(0.0)
+                pbar.set_postfix({
+                    "ok": success_count,
+                    "fail": fail_count,
+                    "last": "ERROR"
+                })
+                tqdm.write(f"    [ERROR] {str(e)[:80]}")
+            finally:
+                pbar.update(1)
 
     if fail_count > 0:
-        tqdm.write(f"    ⚠️  {fail_count} run(s) failed ({timeout_count} timeout)")
+        tqdm.write(f"    ⚠️  {fail_count} run(s) failed")
 
     return scores
 
@@ -244,10 +225,9 @@ def run_benchmark(
         f"PRD Skill Benchmark — {benchmark_id.upper()}\n"
         f"  Provider : {provider} | Model: {model}\n"
         f"  Skill    : {skill_path}\n"
-        f"  Cases    : {len(test_cases)} | Runs/case: {n_runs}"
+        f"  Cases    : {len(test_cases)} | Runs/case: {n_runs}\n"
+        f"  Mode     : Sequential (stable on Windows)"
     )
-
-    mp_context = multiprocessing.get_context("spawn")
 
     if provider == "moonshot":
         temperature = 0.6
@@ -292,12 +272,8 @@ def run_benchmark(
                 for _ in range(n_runs)
             ]
 
-            skill_scores = run_parallel(
-                skill_args, n_runs, mp_context, desc="with_skill"
-            )
-            baseline_scores = run_parallel(
-                baseline_args, n_runs, mp_context, desc="baseline  "
-            )
+            skill_scores = run_sequential(skill_args, desc="with_skill")
+            baseline_scores = run_sequential(baseline_args, desc="baseline  ")
 
             skill_metrics = calculate_metrics(skill_scores)
             baseline_metrics = calculate_metrics(baseline_scores)
@@ -430,9 +406,6 @@ Examples:
         scenario=args.scenario
     )
 
-
-if __name__ == "__main__":
-    main()
 
 if __name__ == "__main__":
     main()
