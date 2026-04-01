@@ -1,0 +1,59 @@
+{
+  "benchmark_id": "b3",
+  "version": "v2",
+  "name": "流程编排完整性（扩充关键词版）",
+  "description": "在 v1 基础上扩充 rule 断言的关键词库。B3 断言以 LLM 为主，v2 主要扩充 b3_01 和 b3_02 的关键词覆盖。",
+  "assertions": [
+    {
+      "id": "b3_01",
+      "type": "step_existence",
+      "method": "rule",
+      "check": "输出包含明确的 PRD 部分（含背景、用户故事、功能需求等章节关键词：背景、目标、用户故事、用户场景、功能需求、需求说明、产品需求、PRD、需求文档、功能架构、核心功能）",
+      "points": 1
+    },
+    {
+      "id": "b3_02",
+      "type": "step_existence",
+      "method": "rule",
+      "check": "输出包含明确的任务列表部分（含编号任务或开发清单关键词：开发任务、任务清单、任务列表、工作拆解、功能拆解、迭代任务、Sprint、用户故事点、任务分解、开发清单、T-、Task、任务、待办）",
+      "points": 1
+    },
+    {
+      "id": "b3_03",
+      "type": "ordering",
+      "method": "llm",
+      "check": "PRD 部分整体出现在任务列表部分之前",
+      "points": 2
+    },
+    {
+      "id": "b3_04",
+      "type": "semantic_dependency",
+      "method": "llm",
+      "check": "任务列表中的每个任务都能在 PRD 的用户故事或功能描述中找到对应来源",
+      "points": 3
+    },
+    {
+      "id": "b3_05",
+      "type": "semantic_dependency",
+      "method": "llm",
+      "check": "不存在无法追溯到 PRD 任何功能点的孤立任务",
+      "points": 2
+    },
+    {
+      "id": "b3_06",
+      "type": "consistency",
+      "method": "llm",
+      "check": "任务的优先级或分组与 PRD 中功能的重要程度保持一致",
+      "points": 1
+    }
+  ],
+  "total_points": 10,
+  "passing_score": 7,
+  "v2_changes": {
+    "description": "相比 v1 扩充了以下断言的关键词库",
+    "changes": [
+      "b3_01: 新增'需求说明'、'产品需求'、'PRD'、'需求文档'、'功能架构'、'核心功能'",
+      "b3_02: 新增'开发任务'、'任务清单'、'工作拆解'、'功能拆解'、'迭代任务'、'Sprint'、'用户故事点'、'任务分解'、'开发清单'、'T-'、'Task'、'任务'、'待办'"
+    ]
+  }
+}
