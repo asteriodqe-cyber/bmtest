@@ -5,7 +5,7 @@ import os
 import re
 
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 
 from evaluators.assertion_checker import load_assertions
 
@@ -67,7 +67,6 @@ def _parse_batch_judge_response(raw: str, assertions: list[dict]) -> list[dict]:
     """解析批量评估响应，处理各种格式异常"""
     raw = raw.strip()
 
-    # 提取 JSON 数组
     json_match = re.search(r'\[.*\]', raw, re.DOTALL)
     if json_match:
         raw = json_match.group(0)
@@ -77,7 +76,6 @@ def _parse_batch_judge_response(raw: str, assertions: list[dict]) -> list[dict]:
         if not isinstance(results, list):
             raise ValueError("Response is not a list")
 
-        # 验证并标准化每个结果
         parsed = []
         for i, item in enumerate(results):
             if i >= len(assertions):
@@ -89,7 +87,6 @@ def _parse_batch_judge_response(raw: str, assertions: list[dict]) -> list[dict]:
                 "reason": str(item.get("reason", ""))[:100]
             })
 
-        # 如果返回数量不足，补充失败结果
         while len(parsed) < len(assertions):
             i = len(parsed)
             parsed.append({
@@ -102,7 +99,6 @@ def _parse_batch_judge_response(raw: str, assertions: list[dict]) -> list[dict]:
         return parsed
 
     except (json.JSONDecodeError, ValueError):
-        # 解析完全失败，返回全部失败
         return [
             {
                 "id": a["id"],
@@ -117,10 +113,17 @@ def _parse_batch_judge_response(raw: str, assertions: list[dict]) -> list[dict]:
 async def run_llm_assertions_for_benchmark(
     content: str,
     benchmark_id: str,
-    scenario: str | None = None
+    scenario: str | None = None,
+    version: str = "v1"
 ) -> dict:
     """
     批量执行所有 llm 类断言（一次 Claude API 调用）
+
+    Args:
+        content:      Agent 生成的文本内容
+        benchmark_id: b1 / b2 / b3
+        scenario:     B2 必须指定（b2b / consumer / internal）
+        version:      断言版本，v1（原版）或 v2（扩充关键词版），默认 v1
 
     使用 Claude 作为 judge 评估 Kimi 生成的 PRD，
     避免用同一个模型自我评估的偏差。
@@ -130,7 +133,7 @@ async def run_llm_assertions_for_benchmark(
     """
     import anthropic
 
-    assertions_data = load_assertions(benchmark_id)
+    assertions_data = load_assertions(benchmark_id, version)
 
     if benchmark_id == "b2":
         if not scenario:
@@ -155,21 +158,14 @@ async def run_llm_assertions_for_benchmark(
     if not llm_assertions:
         return {"results": [], "llm_score": 0.0, "llm_max_score": 0}
 
-    # 防御性检查
-    valid_assertions = []
-    for a in llm_assertions:
-        if "id" not in a or "check" not in a:
-            continue
-        valid_assertions.append(a)
+    valid_assertions = [a for a in llm_assertions if "id" in a and "check" in a]
 
     if not valid_assertions:
         return {"results": [], "llm_score": 0.0, "llm_max_score": 0}
 
-    # 构建批量 prompt
     prompt = _build_batch_judge_prompt(content, valid_assertions)
 
-    # 调用 Claude 作为 judge
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not api_key:
         raise EnvironmentError(
             "ANTHROPIC_API_KEY not set. "
@@ -178,7 +174,6 @@ async def run_llm_assertions_for_benchmark(
 
     client = anthropic.Anthropic(api_key=api_key)
 
-    # 最多重试 3 次
     last_error = None
     raw = ""
     for attempt in range(3):
@@ -186,7 +181,7 @@ async def run_llm_assertions_for_benchmark(
             response = client.messages.create(
                 model="claude-sonnet-4-6",
                 max_tokens=1024,
-                temperature=0.1,  # judge 用低温度，结果更稳定
+                temperature=0.1,
                 system=JUDGE_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": prompt}],
                 timeout=60
@@ -202,10 +197,8 @@ async def run_llm_assertions_for_benchmark(
     if not raw and last_error:
         raise last_error
 
-    # 解析结果
     judgments = _parse_batch_judge_response(raw, valid_assertions)
 
-    # 计算得分
     results = []
     for judgment, assertion in zip(judgments, valid_assertions):
         points = assertion.get("points", 2)
