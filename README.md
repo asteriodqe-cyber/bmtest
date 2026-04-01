@@ -2,7 +2,7 @@
 
 [中文](#中文) | [English](#english)
 
-# Yisun PRD Skill Benchmark
+# PRD Skill Benchmark
 
 **一个基于增量收益的 Agent Skill 评估框架**
 
