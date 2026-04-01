@@ -4,19 +4,48 @@ import json
 import re
 from pathlib import Path
 
+BASE_DIR = Path(__file__).parent.parent
+
 
 # ── 断言文件加载 ──────────────────────────────────────────
 
-def load_assertions(benchmark_id: str) -> dict:
-    """加载对应 benchmark 的断言定义"""
-    path_map = {
-        "b1": "benchmark/assertions/b1_structure.json",
-        "b2": "benchmark/assertions/b2_conditional.json",
-        "b3": "benchmark/assertions/b3_orchestration.json"
+def load_assertions(benchmark_id: str, version: str = "v1") -> dict:
+    """
+    加载对应 benchmark 的断言定义
+
+    Args:
+        benchmark_id: b1 / b2 / b3
+        version:      v1（原版）或 v2（扩充关键词版），默认 v1
+    """
+    file_map = {
+        "b1": {
+            "v1": "benchmark/assertions/b1_structure.json",
+            "v2": "benchmark/assertions/b1_structure_v2.json"
+        },
+        "b2": {
+            "v1": "benchmark/assertions/b2_conditional.json",
+            "v2": "benchmark/assertions/b2_conditional_v2.json"
+        },
+        "b3": {
+            "v1": "benchmark/assertions/b3_orchestration.json",
+            "v2": "benchmark/assertions/b3_orchestration_v2.json"
+        }
     }
-    path = Path(path_map.get(benchmark_id, f"benchmark/assertions/{benchmark_id}.json"))
+
+    if benchmark_id not in file_map:
+        raise ValueError(f"Unknown benchmark_id: {benchmark_id}")
+
+    version_map = file_map[benchmark_id]
+    if version not in version_map:
+        raise ValueError(
+            f"Unknown version '{version}' for {benchmark_id}. "
+            f"Valid: {list(version_map.keys())}"
+        )
+
+    path = BASE_DIR / version_map[version]
     if not path.exists():
         raise FileNotFoundError(f"Assertion file not found: {path}")
+
     return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -96,7 +125,6 @@ def run_rule_assertion(content: str, assertion: dict) -> dict:
     执行单条 rule 类断言
     返回 {id, type, method, passed, score, max_score, reason}
     """
-    # 防御性检查：断言文件格式错误时返回明确错误而非 KeyError
     required_fields = ["id", "check"]
     for required_field in required_fields:
         if required_field not in assertion:
@@ -118,7 +146,7 @@ def run_rule_assertion(content: str, assertion: dict) -> dict:
     passed = False
     reason = ""
 
-    if assertion_type in ("structural", "content_presence", "depth"):
+    if assertion_type in ("structural", "content_presence", "depth", "step_existence"):
         keywords = _extract_keywords_from_check(check_text)
         passed = check_keyword_presence(content, keywords)
         reason = (
@@ -160,7 +188,8 @@ def run_rule_assertion(content: str, assertion: dict) -> dict:
 def run_rule_assertions_for_benchmark(
     content: str,
     benchmark_id: str,
-    scenario: str | None = None
+    scenario: str | None = None,
+    version: str = "v1"
 ) -> dict:
     """
     对一个 benchmark 的所有 rule 类断言批量执行
@@ -169,14 +198,12 @@ def run_rule_assertions_for_benchmark(
         content:      Agent 生成的文本内容
         benchmark_id: b1 / b2 / b3
         scenario:     B2 必须指定（b2b / consumer / internal）
+        version:      断言版本，v1（原版）或 v2（扩充关键词版），默认 v1
 
     Returns:
         {results: [...], rule_score, rule_max_score}
-
-    Raises:
-        ValueError: B2 未指定 scenario，或 scenario 不在已定义列表中
     """
-    assertions_data = load_assertions(benchmark_id)
+    assertions_data = load_assertions(benchmark_id, version)
 
     if benchmark_id == "b2":
         if not scenario:
