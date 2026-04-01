@@ -1,0 +1,205 @@
+{
+  "benchmark_id": "b1",
+  "version": "v2",
+  "name": "基础结构合规性（扩充关键词版）",
+  "description": "在 v1 基础上扩充中文惯用章节标题关键词，更贴近实际 PRD 写作习惯。断言结构与 v1 完全一致，仅关键词库更宽松。",
+  "assertions": [
+    {
+      "id": "b1_01",
+      "type": "structural",
+      "method": "rule",
+      "chapter": "背景与现状",
+      "check": "输出包含'背景'或'Background'或'现状'或'项目背景'或'产品背景'或'业务背景'章节",
+      "points": 1
+    },
+    {
+      "id": "b1_02",
+      "type": "structural",
+      "method": "rule",
+      "chapter": "目标",
+      "check": "输出包含'目标'或'Objectives'或'Goals'或'项目目标'或'产品目标'或'业务目标'章节",
+      "points": 1
+    },
+    {
+      "id": "b1_03",
+      "type": "structural",
+      "method": "rule",
+      "chapter": "目标用户与用户画像",
+      "check": "输出包含'目标用户'或'用户画像'或'Persona'或'User Segment'或'用户分析'或'用户群体'或'用户角色'或'目标人群'章节",
+      "points": 1
+    },
+    {
+      "id": "b1_04",
+      "type": "structural",
+      "method": "rule",
+      "chapter": "用户场景与用例",
+      "check": "输出包含'用户场景'或'用例'或'User Stories'或'Use Cases'或'用户故事'或'核心使用场景'或'使用场景'或'业务场景'或'场景分析'章节",
+      "points": 1
+    },
+    {
+      "id": "b1_05",
+      "type": "structural",
+      "method": "rule",
+      "chapter": "功能需求",
+      "check": "输出包含'功能需求'或'Functional Requirements'或'功能详述'或'功能说明'或'核心功能'或'功能模块'或'功能架构'章节",
+      "points": 1
+    },
+    {
+      "id": "b1_06",
+      "type": "structural",
+      "method": "rule",
+      "chapter": "非功能需求",
+      "check": "输出包含'非功能需求'或'Non-Functional Requirements'或'性能需求'或'性能要求'或'技术要求'或'系统要求'章节",
+      "points": 1
+    },
+    {
+      "id": "b1_07",
+      "type": "structural",
+      "method": "rule",
+      "chapter": "用户体验与设计说明",
+      "check": "输出包含'用户体验'或'设计说明'或'UX'或'User Experience'或'界面设计'或'交互设计'或'页面设计'或'UI设计'或'页面布局'或'界面交互'或'交互说明'章节",
+      "points": 1
+    },
+    {
+      "id": "b1_08",
+      "type": "structural",
+      "method": "rule",
+      "chapter": "假设与约束",
+      "check": "输出包含'假设'或'约束'或'Assumptions'或'Constraints'或'限制条件'或'前提条件'或'风险'或'风险评估'或'依赖与约束'章节",
+      "points": 1
+    },
+    {
+      "id": "b1_09",
+      "type": "structural",
+      "method": "rule",
+      "chapter": "依赖关系",
+      "check": "输出包含'依赖'或'Dependencies'或'外部依赖'或'系统依赖'或'接口依赖'或'技术依赖'章节",
+      "points": 1
+    },
+    {
+      "id": "b1_10",
+      "type": "structural",
+      "method": "rule",
+      "chapter": "验收标准",
+      "check": "输出包含'验收标准'或'Acceptance Criteria'或'验收条件'或'完成标准'或'业务规则'或'验收要求'或'测试标准'章节",
+      "points": 1
+    },
+    {
+      "id": "b1_11",
+      "type": "structural",
+      "method": "rule",
+      "chapter": "度量指标与成功标准",
+      "check": "输出包含'度量指标'或'成功标准'或'Metrics'或'Success Criteria'或'成功指标'或'核心指标'或'KPI'或'OKR'或'衡量标准'或'数据指标'章节",
+      "points": 1
+    },
+    {
+      "id": "b1_12",
+      "type": "structural",
+      "method": "rule",
+      "chapter": "发布计划与时间线",
+      "check": "输出包含'发布计划'或'时间线'或'Timeline'或'Release Plan'或'上线计划'或'里程碑'或'排期'或'迭代计划'或'版本计划'章节",
+      "points": 1
+    },
+    {
+      "id": "b1_13",
+      "type": "structural",
+      "method": "rule",
+      "chapter": "非目标",
+      "check": "输出包含'非目标'或'Out of Scope'或'不包含'或'范围外'或'不在范围'或'暂不支持'或'后续规划'章节",
+      "points": 1
+    },
+    {
+      "id": "b1_14",
+      "type": "structural",
+      "method": "rule",
+      "chapter": "开放问题",
+      "check": "输出包含'开放问题'或'待确认'或'Open Questions'或'待讨论'或'未解决问题'或'待定事项'或'风险与问题'章节",
+      "points": 1
+    },
+    {
+      "id": "b1_15",
+      "type": "ordering",
+      "method": "rule",
+      "chapter": "章节顺序前段",
+      "check": "'背景'章节出现在'目标'章节之前",
+      "points": 1
+    },
+    {
+      "id": "b1_16",
+      "type": "ordering",
+      "method": "rule",
+      "chapter": "章节顺序中段",
+      "check": "'用户'章节出现在'功能需求'章节之前",
+      "points": 1
+    },
+    {
+      "id": "b1_17",
+      "type": "ordering",
+      "method": "rule",
+      "chapter": "章节顺序后段",
+      "check": "'功能需求'章节出现在'验收'章节之前",
+      "points": 1
+    },
+    {
+      "id": "b1_18",
+      "type": "completeness",
+      "method": "llm",
+      "chapter": "背景质量",
+      "check": "'背景'章节包含问题描述和业务动机，而非仅有标题或一句话",
+      "points": 2
+    },
+    {
+      "id": "b1_19",
+      "type": "completeness",
+      "method": "llm",
+      "chapter": "用户故事质量",
+      "check": "用户场景章节使用'作为[用户]，我希望[功能]，以便[价值]'格式，且每个故事完整",
+      "points": 2
+    },
+    {
+      "id": "b1_20",
+      "type": "completeness",
+      "method": "llm",
+      "chapter": "功能需求质量",
+      "check": "功能需求章节包含具体功能描述和边界情况，而非仅列举功能名称",
+      "points": 2
+    },
+    {
+      "id": "b1_21",
+      "type": "completeness",
+      "method": "llm",
+      "chapter": "验收标准质量",
+      "check": "每个主要功能点都有对应的验收标准，不存在孤立的功能描述",
+      "points": 2
+    },
+    {
+      "id": "b1_22",
+      "type": "completeness",
+      "method": "llm",
+      "chapter": "度量指标质量",
+      "check": "度量指标章节包含具体可量化的成功指标，而非模糊表述",
+      "points": 2
+    }
+  ],
+  "total_points": 25,
+  "passing_score": 18,
+  "scoring_note": "rule类断言各1分，llm类断言各2分，共25分。18分及以上视为通过（约72%）",
+  "v2_changes": {
+    "description": "相比 v1 扩充了以下断言的关键词库",
+    "changes": [
+      "b1_03: 新增'用户分析'、'用户群体'、'用户角色'、'目标人群'",
+      "b1_04: 新增'用户故事'、'核心使用场景'、'使用场景'、'业务场景'、'场景分析'",
+      "b1_05: 新增'功能详述'、'功能说明'、'核心功能'、'功能模块'、'功能架构'",
+      "b1_06: 新增'性能需求'、'性能要求'、'技术要求'、'系统要求'",
+      "b1_07: 新增'界面设计'、'交互设计'、'页面设计'、'UI设计'、'页面布局'、'界面交互'、'交互说明'",
+      "b1_08: 新增'限制条件'、'前提条件'、'风险'、'风险评估'、'依赖与约束'",
+      "b1_10: 新增'验收条件'、'完成标准'、'业务规则'、'验收要求'、'测试标准'",
+      "b1_11: 新增'成功指标'、'核心指标'、'KPI'、'OKR'、'衡量标准'、'数据指标'",
+      "b1_12: 新增'上线计划'、'里程碑'、'排期'、'迭代计划'、'版本计划'",
+      "b1_13: 新增'范围外'、'不在范围'、'暂不支持'、'后续规划'",
+      "b1_14: 新增'待讨论'、'未解决问题'、'待定事项'、'风险与问题'",
+      "b1_16: 关键词从'目标用户'改为'用户'（更宽松匹配）",
+      "b1_17: 关键词从'验收标准'改为'验收'（更宽松匹配）"
+    ]
+  }
+}
