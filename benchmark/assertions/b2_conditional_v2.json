@@ -1,0 +1,160 @@
+{
+  "benchmark_id": "b2",
+  "version": "v2",
+  "name": "条件场景适配（扩充关键词版）",
+  "description": "在 v1 基础上扩充 rule 断言的关键词库，更贴近中文 PRD 实际写作习惯。LLM 断言内容不变。",
+  "scenarios": {
+    "b2b": {
+      "scenario_id": "b2b",
+      "label": "B2B 企业级产品",
+      "assertions": [
+        {
+          "id": "b2b_01",
+          "type": "persona_fit",
+          "method": "llm",
+          "chapter": "目标用户与用户画像",
+          "check": "用户画像描述的是企业内部角色（如销售经理、IT管理员、审批人），而非个人消费者",
+          "points": 2
+        },
+        {
+          "id": "b2b_02",
+          "type": "content_presence",
+          "method": "rule",
+          "chapter": "功能需求",
+          "check": "功能需求包含以下任意关键词：权限管理、角色隔离、审批流程、多租户、数据安全、组织架构、RBAC、角色权限、权限控制、企业级、SSO、单点登录、数据隔离、合规、审计日志",
+          "points": 2
+        },
+        {
+          "id": "b2b_03",
+          "type": "content_absence",
+          "method": "rule",
+          "chapter": "功能需求",
+          "check": "功能需求不以病毒式传播、裂变、DAU增长作为核心功能目标",
+          "points": 1
+        },
+        {
+          "id": "b2b_04",
+          "type": "metrics_fit",
+          "method": "llm",
+          "chapter": "度量指标与成功标准",
+          "check": "成功指标侧重企业效率或合规性（如审批时长、系统稳定性、数据安全事件数），而非用户增长指标",
+          "points": 2
+        },
+        {
+          "id": "b2b_05",
+          "type": "depth",
+          "method": "llm",
+          "chapter": "非功能需求",
+          "check": "非功能需求包含安全性或可扩展性的详细要求，而非一笔带过",
+          "points": 2
+        }
+      ],
+      "total_points": 9
+    },
+    "consumer": {
+      "scenario_id": "consumer",
+      "label": "C端消费级产品",
+      "assertions": [
+        {
+          "id": "c_01",
+          "type": "persona_fit",
+          "method": "llm",
+          "chapter": "目标用户与用户画像",
+          "check": "用户画像描述的是个人消费者特征（如年龄、使用习惯、消费动机），而非企业角色",
+          "points": 2
+        },
+        {
+          "id": "c_02",
+          "type": "content_presence",
+          "method": "rule",
+          "chapter": "用户场景与用例",
+          "check": "用户场景包含以下任意关键词：用户旅程、使用习惯、个性化、推荐、社交、用户体验、情感化、沉浸感、互动、分享、关注、点赞、收藏、消息推送、通知、新手引导、留存",
+          "points": 2
+        },
+        {
+          "id": "c_03",
+          "type": "content_absence",
+          "method": "rule",
+          "chapter": "功能需求",
+          "check": "功能需求不以多级审批、企业合规、组织架构作为核心设计约束",
+          "points": 1
+        },
+        {
+          "id": "c_04",
+          "type": "metrics_fit",
+          "method": "llm",
+          "chapter": "度量指标与成功标准",
+          "check": "成功指标侧重用户体验或增长（如留存率、DAU、NPS、转化率），而非企业效率指标",
+          "points": 2
+        },
+        {
+          "id": "c_05",
+          "type": "depth",
+          "method": "llm",
+          "chapter": "用户体验与设计说明",
+          "check": "用户体验章节有具体的交互描述或用户旅程说明，而非仅列标题",
+          "points": 2
+        }
+      ],
+      "total_points": 9
+    },
+    "internal": {
+      "scenario_id": "internal",
+      "label": "内部工具",
+      "assertions": [
+        {
+          "id": "int_01",
+          "type": "persona_fit",
+          "method": "llm",
+          "chapter": "目标用户与用户画像",
+          "check": "用户画像描述的是公司内部特定团队成员（如运营、客服、审核人员），并说明其工作场景",
+          "points": 2
+        },
+        {
+          "id": "int_02",
+          "type": "content_presence",
+          "method": "rule",
+          "chapter": "目标",
+          "check": "目标章节包含以下任意关键词：效率提升、降低人工、减少错误、节省时间、提高效率、降本增效、自动化、批量处理、减少操作步骤、优化流程、内部效率、人工成本",
+          "points": 2
+        },
+        {
+          "id": "int_03",
+          "type": "content_absence",
+          "method": "rule",
+          "chapter": "功能需求",
+          "check": "PRD 不包含大篇幅的市场分析、竞品分析或用户增长策略",
+          "points": 1
+        },
+        {
+          "id": "int_04",
+          "type": "metrics_fit",
+          "method": "llm",
+          "chapter": "度量指标与成功标准",
+          "check": "成功指标侧重内部效率（如处理时长、错误率、人工介入次数），而非外部用户增长",
+          "points": 2
+        },
+        {
+          "id": "int_05",
+          "type": "depth",
+          "method": "llm",
+          "chapter": "假设与约束",
+          "check": "假设与约束章节提到内部资源限制或与现有系统的兼容性要求",
+          "points": 2
+        }
+      ],
+      "total_points": 9
+    }
+  },
+  "passing_score_per_scenario": 6,
+  "overall_pass_rule": "三个场景得分均 >= passing_score_per_scenario 视为整体通过",
+  "scoring_note": "rule类断言各1-2分，llm类断言各2分。每场景满分9分，6分及以上通过（约67%）",
+  "v2_changes": {
+    "description": "相比 v1 扩充了以下断言的关键词库",
+    "changes": [
+      "b2b_02: 新增'RBAC'、'角色权限'、'权限控制'、'企业级'、'SSO'、'单点登录'、'数据隔离'、'合规'、'审计日志'",
+      "c_02: 新增'用户体验'、'情感化'、'沉浸感'、'互动'、'分享'、'关注'、'点赞'、'收藏'、'消息推送'、'通知'、'新手引导'、'留存'",
+      "int_02: 新增'提高效率'、'降本增效'、'自动化'、'批量处理'、'减少操作步骤'、'优化流程'、'内部效率'、'人工成本'"
+    ]
+  }
+}
