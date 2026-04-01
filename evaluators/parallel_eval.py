@@ -84,7 +84,6 @@ def make_run_id(
     condition: str,
     run_idx: int
 ) -> str:
-    # 去掉 "sha256:" 前缀，只取 hex 部分，避免冒号导致 Windows 文件名问题
     skill_hash = compute_sha256(skill_path).replace("sha256:", "")[:8]
     scenario_part = f"_{scenario}" if scenario else ""
     return f"{skill_hash}_{benchmark_id}{scenario_part}_{tc_id}_{condition}_{run_idx}"
@@ -97,12 +96,14 @@ def save_sample(
     llm_results: dict,
     normalized_score: float,
     use_skill: bool,
-    prompt: str
+    prompt: str,
+    assertions_version: str = "v1"
 ) -> None:
     """保存单次运行的详细样本，用于人工审查"""
     sample = {
         "run_id": run_id,
         "condition": "with_skill" if use_skill else "baseline",
+        "assertions_version": assertions_version,
         "prompt": prompt,
         "normalized_score": normalized_score,
         "prd_content": prd_content,
@@ -175,7 +176,8 @@ def print_overall_summary(
     benchmark_id: str,
     overall_gain: dict,
     total_cases: int,
-    elapsed: float
+    elapsed: float,
+    assertions_version: str = "v1"
 ) -> None:
     print_header(f"OVERALL {benchmark_id.upper()} RESULT")
     print(f"  {'Skill pass_rate :':<20} {print_tier_bar(overall_gain['skill_pass_rate'])}")
@@ -190,6 +192,7 @@ def print_overall_summary(
     print(f"  {'Diagnosis       :':<20} {overall_gain['diagnosis']}")
     print(f"  {'─'*55}")
     print(f"  {'Test cases      :':<20} {total_cases}")
+    print(f"  {'Assertions ver  :':<20} {assertions_version}")
     print(f"  {'Elapsed time    :':<20} {elapsed:.1f}s ({elapsed/60:.1f}min)")
     print(f"  {'Log file        :':<20} {LOG_FILE}")
     print(f"  {'Samples dir     :':<20} {SAMPLES_DIR}")
@@ -208,7 +211,8 @@ async def evaluate_single_run(
     scenario: str | None,
     run_id: str,
     checkpoint: dict,
-    prompt: str
+    prompt: str,
+    assertions_version: str = "v1"
 ) -> dict:
     """单次评估（async），支持断点续传，保存详细样本"""
     if run_id in checkpoint["completed_runs"]:
@@ -232,10 +236,10 @@ async def evaluate_single_run(
         )
 
         rule_results = run_rule_assertions_for_benchmark(
-            result.content, benchmark_id, scenario
+            result.content, benchmark_id, scenario, assertions_version
         )
         llm_results = await run_llm_assertions_for_benchmark(
-            result.content, benchmark_id, scenario
+            result.content, benchmark_id, scenario, assertions_version
         )
 
         total_score = rule_results["rule_score"] + llm_results["llm_score"]
@@ -245,7 +249,6 @@ async def evaluate_single_run(
         elapsed = time.time() - start
         logger.info(f"[DONE] {run_id} | score={normalized:.3f} | {elapsed:.1f}s")
 
-        # 保存详细样本（透明化黑箱）
         save_sample(
             run_id=run_id,
             prd_content=result.content,
@@ -253,7 +256,8 @@ async def evaluate_single_run(
             llm_results=llm_results,
             normalized_score=normalized,
             use_skill=use_skill,
-            prompt=prompt
+            prompt=prompt,
+            assertions_version=assertions_version
         )
 
         run_result = {
@@ -279,7 +283,8 @@ async def run_benchmark(
     skill_path: str,
     benchmark_id: str,
     n_runs: int = 3,
-    scenario: str | None = None
+    scenario: str | None = None,
+    assertions_version: str = "v1"
 ) -> dict:
     """运行完整的 benchmark 评估（async，支持断点续传）"""
     start_time = time.time()
@@ -300,7 +305,8 @@ async def run_benchmark(
         f"  Provider : {provider} | Model: {model}\n"
         f"  Skill    : {skill_path}\n"
         f"  Cases    : {len(test_cases)} | Runs/case: {n_runs}\n"
-        f"  Concurrency: {TASK_SEMAPHORE_SIZE} | Judge: Claude Sonnet"
+        f"  Concurrency: {TASK_SEMAPHORE_SIZE} | Judge: Claude Sonnet\n"
+        f"  Assertions : {assertions_version}"
     )
 
     checkpoint = load_checkpoint()
@@ -342,7 +348,7 @@ async def run_benchmark(
                     evaluate_single_run(
                         session, semaphore, skill_path, tc["prompt"],
                         True, benchmark_id, scenario, run_id, checkpoint,
-                        tc["prompt"]
+                        tc["prompt"], assertions_version
                     )
                     for run_id in skill_run_ids
                 ]
@@ -367,7 +373,7 @@ async def run_benchmark(
                     evaluate_single_run(
                         session, semaphore, skill_path, tc["prompt"],
                         False, benchmark_id, scenario, run_id, checkpoint,
-                        tc["prompt"]
+                        tc["prompt"], assertions_version
                     )
                     for run_id in baseline_run_ids
                 ]
@@ -482,7 +488,7 @@ async def run_benchmark(
 
     overall_gain = calculate_skill_gain(skill_all_scores, baseline_all_scores, benchmark_id)
     elapsed = time.time() - start_time
-    print_overall_summary(benchmark_id, overall_gain, len(test_cases), elapsed)
+    print_overall_summary(benchmark_id, overall_gain, len(test_cases), elapsed, assertions_version)
 
     clear_checkpoint()
     logger.info(f"Benchmark {benchmark_id} completed in {elapsed:.1f}s")
@@ -497,6 +503,7 @@ def main():
         epilog="""
 Examples:
   python evaluators/parallel_eval.py --skill datasets/generated_skills/zero_shot/skill_v1.md --benchmark b1
+  python evaluators/parallel_eval.py --skill datasets/generated_skills/zero_shot/skill_v1.md --benchmark b1 --assertions-version v2
   python evaluators/parallel_eval.py --skill datasets/generated_skills/few_shot/skill_v1.md --benchmark b2 --scenario b2b
   python evaluators/parallel_eval.py --skill datasets/generated_skills/zero_shot/skill_v1.md --benchmark b3 --n-runs 3
         """
@@ -506,6 +513,8 @@ Examples:
     parser.add_argument("--n-runs", type=int, default=3)
     parser.add_argument("--scenario", default=None,
                         help="B2 only: b2b / consumer / internal")
+    parser.add_argument("--assertions-version", default="v1", choices=["v1", "v2"],
+                        help="断言版本：v1（原版）或 v2（扩充关键词版），默认 v1")
 
     args = parser.parse_args()
 
@@ -513,7 +522,8 @@ Examples:
         skill_path=args.skill,
         benchmark_id=args.benchmark,
         n_runs=args.n_runs,
-        scenario=args.scenario
+        scenario=args.scenario,
+        assertions_version=args.assertions_version
     ))
 
 
